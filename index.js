@@ -156,10 +156,12 @@ ${knowledge}
 - متى: شكاوى جدية، طلبات جملة كبيرة، أسئلة خارج نطاقك
 - الكود: [TRANSFER]
 
-### 5️⃣ حساب المسافة والتوصيل
-- إذا ذكر العميل مدينته أو سأل عن التوصيل لمنطقته:
-  → استخدمي [DISTANCE:اسم المدينة] — مثال: [DISTANCE:الرياض] أو [DISTANCE:جدة]
-- لا تكتبي أي نص آخر مع الأمر — فقط [DISTANCE:المدينة] وحده
+### 5️⃣ حساب المسافة والتوصيل — قاعدة صارمة
+- **في أي وقت** يذكر العميل مدينة أو منطقة أو يسأل "كم تبعدون" أو "هل توصلون لـ":
+  → ردّي **فقط** بـ [DISTANCE:اسم المدينة] بدون أي نص آخر
+  → أمثلة: [DISTANCE:الرياض] أو [DISTANCE:جدة] أو [DISTANCE:أبها]
+- **لا تعطي معلومات التوصيل يدوياً** — دائماً استخدمي الأمر ليحسب تلقائياً
+- إذا لم تعرفي المدينة اسأليها عن أقرب مدينة كبيرة
 
 ### 6️⃣ التواصل الذكي مع محتوى آل عايد
 - إذا سأل العميل عن طريقة تربية النحل، إنتاج العسل، المناحل، أو أراد التحقق من الأصالة:
@@ -762,40 +764,54 @@ app.post('/webhook', webhookLimiter, async (req, res) => {
     const messages = req.body?.entry?.[0]?.changes?.[0]?.value?.messages;
     if (!messages?.length) return;
     for (const msg of messages) {
-      if (msg.type !== 'text') continue;
+      // تجاهل الأنواع غير المدعومة
+      if (!['text', 'location'].includes(msg.type)) continue;
 
-      // تجاهل الرسائل المكررة بناءً على msg.id
+      // تجاهل الرسائل المكررة
       if (processedMsgIds.has(msg.id)) {
         console.log(`⚠️ Duplicate skipped: ${msg.id}`);
         continue;
       }
       processedMsgIds.add(msg.id);
-      // تنظيف المعرّف بعد 10 دقائق
       setTimeout(() => processedMsgIds.delete(msg.id), 10 * 60 * 1000);
 
+      // رسالة موقع WhatsApp
       if (msg.type === 'location') {
-        // رسالة موقع — نحسب المسافة ونرد بمعلومات التوصيل
         const { latitude, longitude } = msg.location;
         console.log(`📍 ${msg.from}: location ${latitude},${longitude}`);
         await saveCustomer(msg.from);
         const info = await getDeliveryInfo(latitude, longitude);
-        let reply;
-        if (info) {
-          reply = info.sameDay
-            ? `📍 موقعك على بُعد *${info.km} كم* منا 🚗\n✅ التوصيل بمندوب آل عايد متاح — عادةً *نفس اليوم* 🏎️`
-            : `📍 موقعك على بُعد *${info.km} كم* منا\n🚚 التوصيل عبر *SMSA* — يصلك خلال 2-3 أيام عمل بإذن الله`;
-        } else {
-          reply = `📍 وصلني موقعك! 🐝\nنوصّل لجميع مناطق المملكة — داخل الطائف نفس اليوم، وباقي المناطق 2-5 أيام عمل 🚚`;
-        }
+        const reply = info
+          ? (info.sameDay
+              ? `📍 موقعك على بُعد *${info.km} كم* منا 🚗\n✅ التوصيل بمندوب آل عايد — عادةً *نفس اليوم* 🏎️`
+              : `📍 موقعك على بُعد *${info.km} كم* منا\n🚚 التوصيل عبر *SMSA* — يصلك خلال 2-3 أيام عمل بإذن الله`)
+          : `📍 وصلني موقعك! 🐝\nنوصّل لجميع مناطق المملكة — الطائف نفس اليوم، وباقي المناطق 2-5 أيام 🚚`;
         await sendMessage(msg.from, reply);
         await saveMessage(msg.from, 'bot', reply, 'location_reply');
         continue;
       }
 
-      if (msg.type !== 'text') continue; // تجاهل أنواع أخرى (صوت، صورة...)
+      // رسالة نصية — كشف رابط خرائط أبل
+      const text = msg.text.body;
+      const appleMapsMatch = text.match(/maps\.apple\.com\/?\?.*ll=([-\d.]+),([-\d.]+)/);
+      if (appleMapsMatch) {
+        const lat = parseFloat(appleMapsMatch[1]);
+        const lng = parseFloat(appleMapsMatch[2]);
+        console.log(`📍 ${msg.from}: Apple Maps ${lat},${lng}`);
+        await saveCustomer(msg.from);
+        const info = await getDeliveryInfo(lat, lng);
+        const reply = info
+          ? (info.sameDay
+              ? `📍 موقعك على بُعد *${info.km} كم* منا 🚗\n✅ التوصيل بمندوب آل عايد — عادةً *نفس اليوم* 🏎️`
+              : `📍 موقعك على بُعد *${info.km} كم* منا\n🚚 التوصيل عبر *SMSA* — يصلك خلال 2-3 أيام عمل بإذن الله`)
+          : `📍 وصلني موقعك! 🐝\nنوصّل لجميع مناطق المملكة 🚚`;
+        await sendMessage(msg.from, reply);
+        await saveMessage(msg.from, 'bot', reply, 'location_reply');
+        continue;
+      }
 
-      console.log(`📩 ${msg.from}: ${msg.text.body}`);
-      await handleMessage(msg.from, msg.text.body);
+      console.log(`📩 ${msg.from}: ${text}`);
+      await handleMessage(msg.from, text);
     }
   } catch (err) {
     console.error('❌ Webhook error:', err);
