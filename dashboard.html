@@ -152,11 +152,23 @@ body {
       <p>مناحل آل عايد — سجل المحادثات</p>
     </div>
   </div>
-  <div class="live-badge">
-    <div class="dot"></div>
-    <span>مباشر</span>
+  <div style="display:flex;align-items:center;gap:12px">
+    <div class="live-badge">
+      <div class="dot"></div>
+      <span>مباشر</span>
+    </div>
+    <button onclick="setSecret()" style="background:#F5A623;color:#000;border:none;padding:6px 14px;border-radius:8px;font-family:Cairo,sans-serif;font-weight:700;cursor:pointer;font-size:0.85rem">🔑 تسجيل دخول</button>
   </div>
 </header>
+<script>
+function setSecret() {
+  const s = prompt('أدخل API_SECRET:');
+  if (s) { localStorage.setItem('nahla_secret', s); location.reload(); }
+}
+if (!localStorage.getItem('nahla_secret')) {
+  setTimeout(() => { const s = prompt('أدخل API_SECRET للوصول للبيانات:'); if (s) { localStorage.setItem('nahla_secret', s); location.reload(); } }, 500);
+}
+</script>
 
 <!-- Stats -->
 <div class="stats">
@@ -224,7 +236,8 @@ function groupConversations(data) {
 
 async function loadStats() {
   try {
-    const r = await fetch('/api/stats');
+    const secret = localStorage.getItem('nahla_secret') || '';
+    const r = await fetch('/api/stats', { headers: { 'x-api-secret': secret } });
     const d = await r.json();
     document.getElementById('s-conv').textContent = d.conversations || 0;
     document.getElementById('s-cust').textContent = d.customers || 0;
@@ -241,7 +254,8 @@ async function loadStats() {
 async function load() {
   const list = document.getElementById('list');
   try {
-    const r = await fetch('/api/conversations');
+    const secret = localStorage.getItem('nahla_secret') || '';
+    const r = await fetch('/api/conversations', { headers: { 'x-api-secret': secret } });
     const data = await r.json();
 
     if (!data.length) {
