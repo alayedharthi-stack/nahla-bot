@@ -40,6 +40,11 @@ const CONFIG = {
   // Auth للـ API الداخلي
   apiSecret:   process.env.API_SECRET,
 
+  // سلة — OAuth2
+  sallaClientId:     process.env.SALLA_CLIENT_ID,
+  sallaClientSecret: process.env.SALLA_CLIENT_SECRET,
+  sallaRedirectUri:  process.env.SALLA_REDIRECT_URI, // مثال: https://yourapp.railway.app/salla/callback
+
   port: process.env.PORT || 3000,
 };
 
@@ -272,6 +277,68 @@ async function saveCoupon(phone, code, discount) {
   const expires = new Date();
   expires.setDate(expires.getDate() + 30);
   await supabase.from('coupons').insert({ phone, code, discount_percent: discount, expires_at: expires });
+
+  // إنشاء الكوبون في متجر سلة تلقائياً
+  try {
+    await createSallaCoupon(code, discount);
+  } catch (err) {
+    console.error(`⚠️ Salla coupon creation failed (${code}):`, err.response?.data || err.message);
+  }
+}
+
+// ====================================================
+// 🏪 سلة — إنشاء كوبونات حقيقية في المتجر
+// ====================================================
+
+async function getSallaToken() {
+  const { data } = await supabase.from('salla_tokens').select('*').eq('id', 1).maybeSingle();
+  if (!data) throw new Error('❌ سلة: لم يتم الربط بعد — افتح /salla/auth للتفعيل');
+
+  // تجديد التوكن قبل انتهائه بيوم كامل
+  if (data.expires_at - Date.now() < 24 * 60 * 60 * 1000) {
+    return refreshSallaToken(data.refresh_token);
+  }
+  return data.access_token;
+}
+
+async function refreshSallaToken(refreshToken) {
+  const res = await axios.post('https://accounts.salla.sa/oauth2/token', {
+    grant_type:    'refresh_token',
+    refresh_token: refreshToken,
+    client_id:     CONFIG.sallaClientId,
+    client_secret: CONFIG.sallaClientSecret,
+  });
+  const { access_token, refresh_token, expires_in } = res.data;
+  await supabase.from('salla_tokens').upsert({
+    id:            1,
+    access_token,
+    refresh_token,
+    expires_at:    Date.now() + expires_in * 1000,
+    updated_at:    new Date(),
+  });
+  console.log('🔄 Salla token refreshed');
+  return access_token;
+}
+
+async function createSallaCoupon(code, discount) {
+  const accessToken = await getSallaToken();
+  const expiry = new Date();
+  expiry.setDate(expiry.getDate() + 30);
+
+  await axios.post('https://api.salla.dev/admin/v2/coupons', {
+    code,
+    type:                  'percentage',
+    amount:                discount,
+    free_shipping:         false,
+    expiry_date:           expiry.toISOString().split('T')[0],
+    exclude_sale_products: false,
+  }, {
+    headers: {
+      Authorization:  `Bearer ${accessToken}`,
+      'Content-Type': 'application/json',
+    },
+  });
+  console.log(`✅ Salla coupon created: ${code} (${discount}%)`);
 }
 
 // توليد كود الكوبون بتشفير آمن (5 حروف عشوائية بدلاً من حرف+رقم)
@@ -707,6 +774,56 @@ app.post('/api/salla/order', apiLimiter, async (req, res) => {
 
   } catch (err) {
     console.error('❌ Salla order webhook error:', err.message);
+  }
+});
+
+// ====================================================
+// 🔐 سلة OAuth — إعداد أولي مرة واحدة فقط
+// ====================================================
+
+// الخطوة 1: افتح هذا الرابط في المتصفح (مع x-api-secret في الهيدر أو عبر الداشبورد)
+app.get('/salla/auth', (req, res) => {
+  if (req.query.secret !== CONFIG.apiSecret) return res.status(403).send('Unauthorized');
+  if (!CONFIG.sallaClientId || !CONFIG.sallaRedirectUri) {
+    return res.status(500).send('❌ SALLA_CLIENT_ID أو SALLA_REDIRECT_URI غير مضبوط');
+  }
+  const url = new URL('https://accounts.salla.sa/oauth2/auth');
+  url.searchParams.set('client_id',     CONFIG.sallaClientId);
+  url.searchParams.set('redirect_uri',  CONFIG.sallaRedirectUri);
+  url.searchParams.set('response_type', 'code');
+  url.searchParams.set('scope',         'offline_access marketing.read_write');
+  res.redirect(url.toString());
+});
+
+// الخطوة 2: سلة ترجع هنا بعد موافقة المستخدم
+app.get('/salla/callback', async (req, res) => {
+  const { code, error } = req.query;
+  if (error) return res.status(400).send(`❌ خطأ من سلة: ${error}`);
+  if (!code)  return res.status(400).send('❌ لا يوجد code');
+
+  try {
+    const tokenRes = await axios.post('https://accounts.salla.sa/oauth2/token', {
+      grant_type:    'authorization_code',
+      code,
+      client_id:     CONFIG.sallaClientId,
+      client_secret: CONFIG.sallaClientSecret,
+      redirect_uri:  CONFIG.sallaRedirectUri,
+    });
+
+    const { access_token, refresh_token, expires_in } = tokenRes.data;
+    await supabase.from('salla_tokens').upsert({
+      id:            1,
+      access_token,
+      refresh_token,
+      expires_at:    Date.now() + expires_in * 1000,
+      updated_at:    new Date(),
+    });
+
+    console.log('✅ Salla connected successfully');
+    res.send('<h2>✅ تم ربط سلة بنجاح!</h2><p>نحلة الآن تنشئ الكوبونات مباشرة في متجرك.</p>');
+  } catch (err) {
+    console.error('❌ Salla OAuth callback error:', err.response?.data || err.message);
+    res.status(500).send(`❌ فشل الربط: ${err.response?.data?.message || err.message}`);
   }
 });
 
