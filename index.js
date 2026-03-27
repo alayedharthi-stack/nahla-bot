@@ -15,6 +15,7 @@ const path       = require('path');
 const knowledge  = require('./knowledge');
 
 const app = express();
+app.set('trust proxy', 1); // مطلوب على Railway وكل reverse proxy
 app.use(express.json());
 
 // ====================================================
