@@ -156,7 +156,12 @@ ${knowledge}
 - متى: شكاوى جدية، طلبات جملة كبيرة، أسئلة خارج نطاقك
 - الكود: [TRANSFER]
 
-### 5️⃣ التواصل الذكي مع محتوى آل عايد
+### 5️⃣ حساب المسافة والتوصيل
+- إذا ذكر العميل مدينته أو سأل عن التوصيل لمنطقته:
+  → استخدمي [DISTANCE:اسم المدينة] — مثال: [DISTANCE:الرياض] أو [DISTANCE:جدة]
+- لا تكتبي أي نص آخر مع الأمر — فقط [DISTANCE:المدينة] وحده
+
+### 6️⃣ التواصل الذكي مع محتوى آل عايد
 - إذا سأل العميل عن طريقة تربية النحل، إنتاج العسل، المناحل، أو أراد التحقق من الأصالة:
   → أرسلي رابط يوتيوب: *youtube.com/@ayed_honey* 🎬
 - إذا ذكر أنه شاهد فيديو أو محتوى أو جاء من تيك توك أو سناب:
@@ -442,6 +447,21 @@ const WA_HEADERS = () => ({
 const STORE_LAT = 21.2854;
 const STORE_LNG = 40.4155;
 
+// تحويل اسم المدينة إلى إحداثيات عبر Geocoding API
+async function geocodeCity(cityName) {
+  if (!CONFIG.googleMapsKey) return null;
+  try {
+    const { data } = await axios.get('https://maps.googleapis.com/maps/api/geocode/json', {
+      params: { address: `${cityName}, Saudi Arabia`, key: CONFIG.googleMapsKey, language: 'ar' },
+    });
+    const loc = data.results?.[0]?.geometry?.location;
+    return loc ? { lat: loc.lat, lng: loc.lng } : null;
+  } catch (err) {
+    console.error('❌ Geocode error:', err.message);
+    return null;
+  }
+}
+
 // حساب المسافة بالكيلومتر وتحديد نوع التوصيل
 async function getDeliveryInfo(lat, lng) {
   if (!CONFIG.googleMapsKey) return null;
@@ -546,7 +566,26 @@ async function handleMessage(phone, userMessage) {
       return;
     }
 
-    // 2. كوبون خصم — نحلة تقرر النسبة
+    // 2. حساب المسافة من اسم المدينة
+    const distanceMatch = botReply.match(/\[DISTANCE:([^\]]+)\]/);
+    if (distanceMatch) {
+      const cityName = distanceMatch[1].trim();
+      const coords   = await geocodeCity(cityName);
+      const info     = coords ? await getDeliveryInfo(coords.lat, coords.lng) : null;
+      let reply;
+      if (info) {
+        reply = info.sameDay
+          ? `📍 ${cityName} على بُعد *${info.km} كم* منا ✅\nمتاح توصيل بمندوب آل عايد — عادةً *نفس اليوم* 🏎️`
+          : `📍 ${cityName} على بُعد *${info.km} كم* منا 🚚\nنوصّل عبر *SMSA* خلال 2-3 أيام عمل بإذن الله`;
+      } else {
+        reply = `🚚 نوصّل لجميع مناطق المملكة — داخل الطائف نفس اليوم، وباقي المناطق 2-5 أيام عمل`;
+      }
+      await sendMessage(phone, reply);
+      await saveMessage(phone, 'bot', reply, 'distance_reply');
+      return;
+    }
+
+    // 3. كوبون خصم — نحلة تقرر النسبة
     const couponMatch = botReply.match(/\[COUPON:(\d+)\]/);
     if (couponMatch) {
       const isVip  = customer?.is_vip || false;
