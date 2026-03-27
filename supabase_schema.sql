@@ -29,6 +29,16 @@ CREATE TABLE coupons (
   expires_at TIMESTAMPTZ
 );
 
+-- توكنات سلة — سطر واحد دائماً (id = 1)
+CREATE TABLE salla_tokens (
+  id INT PRIMARY KEY DEFAULT 1,
+  access_token TEXT NOT NULL,
+  refresh_token TEXT NOT NULL,
+  expires_at BIGINT NOT NULL,    -- Unix timestamp بالميلي ثانية
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  CONSTRAINT one_row CHECK (id = 1)
+);
+
 -- فهارس للسرعة
 CREATE INDEX ON conversations(phone);
 CREATE INDEX ON conversations(created_at DESC);
