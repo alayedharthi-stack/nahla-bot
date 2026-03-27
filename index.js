@@ -759,6 +759,51 @@ app.post('/api/post-purchase', requireApiSecret, apiLimiter, async (req, res) =>
   res.json({ success: true });
 });
 
+// Webhook سلة — سلة متروكة (abandoned_cart.created + abandoned_cart.updated)
+// الرابط: /api/salla/abandoned-cart?secret=API_SECRET
+app.post('/api/salla/abandoned-cart', apiLimiter, async (req, res) => {
+  const secret = req.query.secret;
+  if (!CONFIG.apiSecret || secret !== CONFIG.apiSecret) {
+    return res.status(403).json({ error: 'Unauthorized' });
+  }
+
+  res.json({ success: true });
+
+  try {
+    const cart     = req.body?.data || req.body;
+    const customer = cart?.customer || {};
+
+    const mobileCode = (customer.mobile_code || '+966').replace('+', '');
+    const mobile     = (customer.mobile || '').replace(/^0/, '');
+    const phone      = mobileCode + mobile;
+    if (!mobile) { console.warn('⚠️ abandoned-cart: no phone'); return; }
+
+    const name = [customer.first_name, customer.last_name].filter(Boolean).join(' ') || 'عزيزنا';
+    console.log(`🛒 Abandoned cart: ${phone} | ${name}`);
+
+    await saveCustomer(phone, { name });
+
+    // الخطوة 1: فوري — قالب abandoned_cart_1
+    await abandonedCartFirst(phone, name);
+
+    // الخطوة 2: بعد 48 ساعة — قالب abandoned_cart_3 + كوبون
+    const code = await generateUniqueCouponCode();
+    await saveCoupon(phone, code, 7, 2); // صالح يومين
+    const sendAt = new Date();
+    sendAt.setHours(sendAt.getHours() + 48);
+    await scheduleMessage(phone, 'abandoned_cart_3', [
+      { type: 'body', parameters: [
+        { type: 'text', text: name },
+        { type: 'text', text: '7' },
+        { type: 'text', text: code },
+      ]},
+    ], sendAt);
+
+  } catch (err) {
+    console.error('❌ Salla abandoned-cart webhook error:', err.message);
+  }
+});
+
 // Webhook سلة — طلب جديد (order.created)
 // الرابط: /api/salla/order?secret=API_SECRET
 app.post('/api/salla/order', apiLimiter, async (req, res) => {
