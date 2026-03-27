@@ -276,14 +276,14 @@ async function saveMessage(phone, role, message, intent = 'ai_reply') {
   await supabase.from('conversations').insert({ phone, role, message, intent, created_at: new Date() });
 }
 
-async function saveCoupon(phone, code, discount) {
+async function saveCoupon(phone, code, discount, days = 3) {
   const expires = new Date();
-  expires.setDate(expires.getDate() + 30);
+  expires.setDate(expires.getDate() + days);
   await supabase.from('coupons').insert({ phone, code, discount_percent: discount, expires_at: expires });
 
   // إنشاء الكوبون في متجر سلة تلقائياً
   try {
-    await createSallaCoupon(code, discount);
+    await createSallaCoupon(code, discount, days);
   } catch (err) {
     console.error(`⚠️ Salla coupon creation failed (${code}):`, err.response?.data || err.message);
   }
@@ -323,10 +323,10 @@ async function refreshSallaToken(refreshToken) {
   return access_token;
 }
 
-async function createSallaCoupon(code, discount) {
+async function createSallaCoupon(code, discount, days = 3) {
   const accessToken = await getSallaToken();
   const expiry = new Date();
-  expiry.setDate(expiry.getDate() + 30);
+  expiry.setDate(expiry.getDate() + days);
 
   await axios.post('https://api.salla.dev/admin/v2/coupons', {
     code,
@@ -495,7 +495,8 @@ async function handleMessage(phone, userMessage) {
       // حماية: لا تتجاوز الحد المسموح
       discount = isVip ? Math.min(discount, 12) : Math.min(discount, 9);
       const code   = await generateUniqueCouponCode(discount, isVip);
-      await saveCoupon(phone, code, discount);
+      const days   = isVip ? 14 : 1; // VIP = 14 يوم | عادي = 24 ساعة (ضغط للشراء)
+      await saveCoupon(phone, code, discount, days);
 
       botReply = botReply.replace(/\[COUPON:\d+\]/,
         `\n\n🎁 *مفاجأتك من آل عايد:*\n` +
@@ -555,7 +556,7 @@ async function abandonedCartSecond(phone, cartInfo) {
 // السلة المتروكة — التنبيه الثالث (بعد 48 ساعة) — قالب Meta + كوبون
 async function abandonedCartThird(phone, customerName) {
   const code = await generateUniqueCouponCode(7);
-  await saveCoupon(phone, code, 7);
+  await saveCoupon(phone, code, 7, 3); // 3 أيام — سلة متروكة
 
   await sendTemplate(phone, 'abandoned_cart_3', [
     { type: 'body', parameters: [
@@ -585,7 +586,7 @@ async function handleInactiveCustomers() {
     const isVip    = customer.is_vip || false;
     const discount = isVip ? 12 : 7;
     const code     = await generateUniqueCouponCode(discount, isVip);
-    await saveCoupon(customer.phone, code, discount);
+    await saveCoupon(customer.phone, code, discount, isVip ? 14 : 3); // VIP = 14 يوم | عادي = 3 أيام
 
     await sendTemplate(customer.phone, isVip ? 'vip_coupon' : 'win_back', [
       { type: 'body', parameters: [
@@ -621,7 +622,7 @@ async function monthlySurprise() {
 
   for (const customer of selected) {
     const code = await generateUniqueCouponCode(7);
-    await saveCoupon(customer.phone, code, 7);
+    await saveCoupon(customer.phone, code, 7, 3); // 3 أيام — هدية شهرية
 
     await sendTemplate(customer.phone, 'surprise_coupon', [
       { type: 'body', parameters: [
@@ -785,23 +786,28 @@ app.post('/api/salla/order', apiLimiter, async (req, res) => {
 // ====================================================
 
 // الخطوة 1: افتح هذا الرابط في المتصفح (مع x-api-secret في الهيدر أو عبر الداشبورد)
+let sallaOAuthState = null; // تخزين مؤقت للـ state
+
 app.get('/salla/auth', (req, res) => {
   if (req.query.secret !== CONFIG.apiSecret) return res.status(403).send('Unauthorized');
   if (!CONFIG.sallaClientId || !CONFIG.sallaRedirectUri) {
     return res.status(500).send('❌ SALLA_CLIENT_ID أو SALLA_REDIRECT_URI غير مضبوط');
   }
+  sallaOAuthState = crypto.randomBytes(16).toString('hex'); // 32 حرف — أكثر من الحد الأدنى
   const url = new URL('https://accounts.salla.sa/oauth2/auth');
   url.searchParams.set('client_id',     CONFIG.sallaClientId);
   url.searchParams.set('redirect_uri',  CONFIG.sallaRedirectUri);
   url.searchParams.set('response_type', 'code');
   url.searchParams.set('scope',         'offline_access marketing.read_write');
+  url.searchParams.set('state',         sallaOAuthState);
   res.redirect(url.toString());
 });
 
 // الخطوة 2: سلة ترجع هنا بعد موافقة المستخدم
 app.get('/salla/callback', async (req, res) => {
-  const { code, error } = req.query;
+  const { code, error, state } = req.query;
   if (error) return res.status(400).send(`❌ خطأ من سلة: ${error}`);
+  if (!sallaOAuthState || state !== sallaOAuthState) return res.status(400).send('❌ state غير صالح — أعد فتح /salla/auth');
   if (!code)  return res.status(400).send('❌ لا يوجد code');
 
   try {
