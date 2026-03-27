@@ -23,6 +23,7 @@ app.use(express.json());
 // ====================================================
 const CONFIG = {
   // AI Keys — الأولوية: OpenAI ← Claude ← Gemini
+  aiProvider:  process.env.AI_PROVIDER || 'claude',
   openaiKey:   process.env.OPENAI_API_KEY,
   claudeKey:   process.env.CLAUDE_API_KEY,
   geminiKey:   process.env.GEMINI_API_KEY,
@@ -126,10 +127,11 @@ ${knowledge}
 
 ### 1️⃣ إرسال كوبون خصم
 - متى: عند التردد في الشراء، طلب الخصم، أو الحاجة لتحفيز
-- نسب الخصم: 5% أو 7% أو 9% (أنتِ تقررين المناسب حسب الموقف)
+- الكوبون الترحيبي للعميل الجديد: 5% دائماً [COUPON:5]
+- نسب الخصم العامة: 5% أو 7% أو 9% (أنتِ تقررين المناسب حسب الموقف)
 - 12% للعملاء المميزين VIP فقط
-- *مهم جداً:* لا تذكري النسبة مسبقاً — قولي فقط "عندي مفاجأة لك 🎁"
-- الكوبون يُولَّد تلقائياً بالكود [COUPON:رقم] مثل [COUPON:7]
+- *مهم جداً:* لا تذكري النسبة أبداً — قولي فقط "عندي مفاجأة لك 🎁"
+- الكوبون يُولَّد تلقائياً بالكود [COUPON:رقم] مثل [COUPON:5]
 
 ### 2️⃣ إرسال قالب رابط المتجر
 - متى: عند السؤال عن المتجر أو الطلب
@@ -208,37 +210,38 @@ async function askGemini(messages) {
 
 // الدالة الرئيسية — تجرّب الثلاثة بالترتيب
 async function askAI(messages) {
-  // المزود 1: OpenAI
-  if (CONFIG.openaiKey) {
-    try {
-      const reply = await askOpenAI(messages);
-      console.log('✅ OpenAI responded');
-      return reply;
-    } catch (err) {
-      console.warn('⚠️ OpenAI failed:', err.response?.data?.error?.message || err.message);
-    }
+  const provider = CONFIG.aiProvider.toLowerCase();
+
+  // مزود محدد عبر AI_PROVIDER
+  if (provider === 'openai' && CONFIG.openaiKey) {
+    const reply = await askOpenAI(messages);
+    console.log('✅ OpenAI responded');
+    return reply;
+  }
+  if (provider === 'gemini' && CONFIG.geminiKey) {
+    const reply = await askGemini(messages);
+    console.log('✅ Gemini responded');
+    return reply;
+  }
+  if (provider === 'claude' && CONFIG.claudeKey) {
+    const reply = await askClaude(messages);
+    console.log('✅ Claude responded');
+    return reply;
   }
 
-  // المزود 2: Claude
-  if (CONFIG.claudeKey) {
+  // احتياطي: جرب الثلاثة بالترتيب إن لم يُعرَّف المزود أو المفتاح غير موجود
+  for (const [name, fn, key] of [
+    ['OpenAI', askOpenAI, CONFIG.openaiKey],
+    ['Claude', askClaude, CONFIG.claudeKey],
+    ['Gemini', askGemini, CONFIG.geminiKey],
+  ]) {
+    if (!key) continue;
     try {
-      const reply = await askClaude(messages);
-      console.log('✅ Claude responded');
+      const reply = await fn(messages);
+      console.log(`✅ ${name} responded (fallback)`);
       return reply;
     } catch (err) {
-      console.warn('⚠️ Claude failed:', err.response?.data?.error?.message || err.message);
-    }
-  }
-
-  // المزود 3: Gemini (الاحتياطي الأخير)
-  if (CONFIG.geminiKey) {
-    try {
-      const reply = await askGemini(messages);
-      console.log('✅ Gemini responded');
-      return reply;
-    } catch (err) {
-      console.error('❌ All AI providers failed:', err.message);
-      throw new Error('All AI providers failed');
+      console.warn(`⚠️ ${name} failed:`, err.response?.data?.error?.message || err.message);
     }
   }
 
@@ -276,7 +279,7 @@ async function saveMessage(phone, role, message, intent = 'ai_reply') {
   await supabase.from('conversations').insert({ phone, role, message, intent, created_at: new Date() });
 }
 
-async function saveCoupon(phone, code, discount, days = 3) {
+async function saveCoupon(phone, code, discount, days = 1) {
   const expires = new Date();
   expires.setDate(expires.getDate() + days);
   await supabase.from('coupons').insert({ phone, code, discount_percent: discount, expires_at: expires });
@@ -344,18 +347,21 @@ async function createSallaCoupon(code, discount, days = 3) {
   console.log(`✅ Salla coupon created: ${code} (${discount}%)`);
 }
 
-// توليد كود الكوبون بتشفير آمن (5 حروف عشوائية بدلاً من حرف+رقم)
-function generateCouponCode(discount, isVip = false) {
-  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-  const bytes = crypto.randomBytes(5);
-  const part  = Array.from(bytes).map(b => chars[b % chars.length]).join('');
-  return isVip ? `VIP${discount}${part}` : `NAH${discount}${part}`;
+// توليد كود الكوبون — حرفان + رقمان (مختصر وسهل الحفظ)
+function generateCouponCode() {
+  const letters = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
+  const digits  = '23456789';
+  const lb = crypto.randomBytes(2);
+  const db = crypto.randomBytes(2);
+  const part = Array.from(lb).map(b => letters[b % letters.length]).join('')
+             + Array.from(db).map(b => digits[b % digits.length]).join('');
+  return part; // مثال: AB27
 }
 
 // توليد كود فريد مع التحقق من عدم التكرار في قاعدة البيانات
-async function generateUniqueCouponCode(discount, isVip = false) {
+async function generateUniqueCouponCode() {
   for (let attempt = 0; attempt < 5; attempt++) {
-    const code = generateCouponCode(discount, isVip);
+    const code = generateCouponCode();
     const { data } = await supabase.from('coupons').select('id').eq('code', code).maybeSingle();
     if (!data) return code;
   }
@@ -494,14 +500,15 @@ async function handleMessage(phone, userMessage) {
       let discount = parseInt(couponMatch[1]);
       // حماية: لا تتجاوز الحد المسموح
       discount = isVip ? Math.min(discount, 12) : Math.min(discount, 9);
-      const code   = await generateUniqueCouponCode(discount, isVip);
-      const days   = isVip ? 14 : 1; // VIP = 14 يوم | عادي = 24 ساعة (ضغط للشراء)
+      const code   = await generateUniqueCouponCode();
+      const days   = isVip ? 2 : 1; // VIP = يومان | عادي = 24 ساعة
       await saveCoupon(phone, code, discount, days);
 
+      const validityText = days === 1 ? '24 ساعة' : `${days} أيام`;
       botReply = botReply.replace(/\[COUPON:\d+\]/,
         `\n\n🎁 *مفاجأتك من آل عايد:*\n` +
         `🏷️ كود الخصم: *${code}*\n` +
-        `📅 صالح 30 يوم\n` +
+        `📅 صالح ${validityText}\n` +
         `🛒 استخدمه في: *ayedhoney.com*`
       );
       intent = 'coupon_sent';
@@ -555,8 +562,8 @@ async function abandonedCartSecond(phone, cartInfo) {
 
 // السلة المتروكة — التنبيه الثالث (بعد 48 ساعة) — قالب Meta + كوبون
 async function abandonedCartThird(phone, customerName) {
-  const code = await generateUniqueCouponCode(7);
-  await saveCoupon(phone, code, 7, 3); // 3 أيام — سلة متروكة
+  const code = await generateUniqueCouponCode();
+  await saveCoupon(phone, code, 7, 1); // 24 ساعة — سلة متروكة
 
   await sendTemplate(phone, 'abandoned_cart_3', [
     { type: 'body', parameters: [
@@ -585,8 +592,8 @@ async function handleInactiveCustomers() {
   for (const customer of inactive) {
     const isVip    = customer.is_vip || false;
     const discount = isVip ? 12 : 7;
-    const code     = await generateUniqueCouponCode(discount, isVip);
-    await saveCoupon(customer.phone, code, discount, isVip ? 14 : 3); // VIP = 14 يوم | عادي = 3 أيام
+    const code     = await generateUniqueCouponCode();
+    await saveCoupon(customer.phone, code, discount, isVip ? 3 : 1); // VIP = 3 أيام | عادي = 24 ساعة
 
     await sendTemplate(customer.phone, isVip ? 'vip_coupon' : 'win_back', [
       { type: 'body', parameters: [
@@ -621,8 +628,8 @@ async function monthlySurprise() {
   console.log(`🎉 Monthly surprise: ${selected.length} / ${customers.length} customers`);
 
   for (const customer of selected) {
-    const code = await generateUniqueCouponCode(7);
-    await saveCoupon(customer.phone, code, 7, 3); // 3 أيام — هدية شهرية
+    const code = await generateUniqueCouponCode();
+    await saveCoupon(customer.phone, code, 7, 1); // 24 ساعة — هدية شهرية
 
     await sendTemplate(customer.phone, 'surprise_coupon', [
       { type: 'body', parameters: [
