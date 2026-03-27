@@ -577,14 +577,21 @@ async function abandonedCartThird(phone, customerName) {
 
 // العملاء النائمون — يومياً الساعة 10 صباحاً
 async function handleInactiveCustomers() {
-  const cutoff = new Date();
-  cutoff.setDate(cutoff.getDate() - 180);
+  const now = new Date();
+
+  // عميل نائم = لم يتواصل منذ 180 يوم
+  const inactiveCutoff = new Date(now);
+  inactiveCutoff.setDate(inactiveCutoff.getDate() - 180);
+
+  // لا نعيد الإرسال إلا بعد 90 يوم من آخر رسالة استعادة
+  const resendCutoff = new Date(now);
+  resendCutoff.setDate(resendCutoff.getDate() - 90);
 
   const { data: inactive } = await supabase
     .from('customers').select('*')
-    .lt('last_contact', cutoff.toISOString())
-    .eq('win_back_sent', false)
-    .limit(15); // 15 عميل يومياً — لا مبالغة
+    .lt('last_contact', inactiveCutoff.toISOString())
+    .or(`win_back_sent_at.is.null,win_back_sent_at.lt.${resendCutoff.toISOString()}`)
+    .limit(15); // 15 عميل يومياً
 
   if (!inactive?.length) { console.log('✅ No inactive customers today'); return; }
   console.log(`💛 Win-back: ${inactive.length} customers`);
@@ -593,7 +600,7 @@ async function handleInactiveCustomers() {
     const isVip    = customer.is_vip || false;
     const discount = isVip ? 12 : 7;
     const code     = await generateUniqueCouponCode();
-    await saveCoupon(customer.phone, code, discount, isVip ? 3 : 1); // VIP = 3 أيام | عادي = 24 ساعة
+    await saveCoupon(customer.phone, code, discount, isVip ? 3 : 1);
 
     await sendTemplate(customer.phone, isVip ? 'vip_coupon' : 'win_back', [
       { type: 'body', parameters: [
@@ -603,7 +610,7 @@ async function handleInactiveCustomers() {
       ]},
     ]);
 
-    await supabase.from('customers').update({ win_back_sent: true }).eq('phone', customer.phone);
+    await supabase.from('customers').update({ win_back_sent_at: now.toISOString() }).eq('phone', customer.phone);
     await saveMessage(customer.phone, 'bot', `[win_back template | coupon: ${code}]`, 'win_back');
     await new Promise(r => setTimeout(r, 2000));
   }

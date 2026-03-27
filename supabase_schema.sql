@@ -7,8 +7,13 @@ CREATE TABLE customers (
   name VARCHAR(100),
   first_contact TIMESTAMPTZ DEFAULT NOW(),
   last_contact TIMESTAMPTZ DEFAULT NOW(),
-  win_back_sent BOOLEAN DEFAULT false
+  win_back_sent_at TIMESTAMPTZ NULL  -- تاريخ آخر رسالة استعادة (NULL = لم يُرسل بعد)
 );
+
+-- إذا كان الجدول موجوداً مسبقاً شغّل هذا بدلاً من CREATE:
+-- ALTER TABLE customers ADD COLUMN IF NOT EXISTS win_back_sent_at TIMESTAMPTZ NULL;
+-- UPDATE customers SET win_back_sent_at = NOW() WHERE win_back_sent = true;
+-- ALTER TABLE customers DROP COLUMN IF EXISTS win_back_sent;
 
 CREATE TABLE conversations (
   id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
