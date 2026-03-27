@@ -637,11 +637,19 @@ async function handleMessage(phone, userMessage) {
 // ====================================================
 
 // السلة المتروكة — التنبيه الأول (بعد ساعة) — قالب Meta
-async function abandonedCartFirst(phone, customerName) {
-  await sendTemplate(phone, 'abandoned_cart_1', [
-    { type: 'body', parameters: [{ type: 'text', text: customerName || 'عزيزنا' }] }
-  ]);
-  await saveMessage(phone, 'bot', '[abandoned_cart_1 template]', 'abandoned_cart');
+async function abandonedCartFirst(phone, customerName, checkoutUrl) {
+  const components = [
+    { type: 'body', parameters: [{ type: 'text', text: customerName || 'عزيزنا' }] },
+  ];
+  // إذا عندنا رابط السلة — نضيفه للزر الديناميكي
+  if (checkoutUrl) {
+    components.push({
+      type: 'button', sub_type: 'url', index: '0',
+      parameters: [{ type: 'text', text: checkoutUrl }],
+    });
+  }
+  await sendTemplate(phone, 'abandoned_cart_1', components);
+  await saveMessage(phone, 'bot', `[abandoned_cart_1 | url:${checkoutUrl || 'static'}]`, 'abandoned_cart');
 }
 
 // السلة المتروكة — التنبيه الثاني (بعد 23 ساعة) — نحلة تكتبه
@@ -898,13 +906,14 @@ app.post('/api/salla/abandoned-cart', apiLimiter, async (req, res) => {
     const phone      = mobileCode + mobile;
     if (!mobile) { console.warn('⚠️ abandoned-cart: no phone'); return; }
 
-    const name = [customer.first_name, customer.last_name].filter(Boolean).join(' ') || 'عزيزنا';
-    console.log(`🛒 Abandoned cart: ${phone} | ${name}`);
+    const name        = [customer.first_name, customer.last_name].filter(Boolean).join(' ') || 'عزيزنا';
+    const checkoutUrl = cart?.urls?.checkout || cart?.checkout_url || null;
+    console.log(`🛒 Abandoned cart: ${phone} | ${name} | url:${checkoutUrl}`);
 
     await saveCustomer(phone, { name });
 
-    // الخطوة 1: فوري — قالب abandoned_cart_1
-    await abandonedCartFirst(phone, name);
+    // الخطوة 1: فوري — قالب abandoned_cart_1 مع رابط السلة الديناميكي
+    await abandonedCartFirst(phone, name, checkoutUrl);
 
     // الخطوة 2: بعد 48 ساعة — قالب abandoned_cart_3 + كوبون
     const code = await generateUniqueCouponCode();
