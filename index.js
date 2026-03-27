@@ -143,6 +143,7 @@ ${knowledge}
   - [TEMPLATE:surprise_coupon] — مفاجأة خصم لأي عميل تستحق تحفيزه
   - [TEMPLATE:coupon_gift] — هدية كوبون في المناسبات أو لتشجيع الشراء
 - ملاحظة: القوالب التي تحتوي كوبون (win_back, vip_coupon, surprise_coupon, coupon_gift) ستُولَّد تلقائياً بالكود والمدة
+- ملاحظة: قوالب تتبع الطلبات (order_tracking, post_purchase, review_request) تُرسل تلقائياً من أحداث سلة — لا تستخدميها في المحادثة
 
 ### 3️⃣ إرسال قالب التواصل مع المالك
 - متى: عند طلب التواصل المباشر
@@ -805,6 +806,61 @@ app.post('/api/salla/order', apiLimiter, async (req, res) => {
 
   } catch (err) {
     console.error('❌ Salla order webhook error:', err.message);
+  }
+});
+
+// Webhook سلة — تحديث حالة الطلب (order.status.updated)
+// الرابط: /api/salla/order-status?secret=API_SECRET
+app.post('/api/salla/order-status', apiLimiter, async (req, res) => {
+  const secret = req.query.secret;
+  if (!CONFIG.apiSecret || secret !== CONFIG.apiSecret) {
+    return res.status(403).json({ error: 'Unauthorized' });
+  }
+
+  res.json({ success: true }); // رد سريع لسلة
+
+  try {
+    const order    = req.body?.data || req.body;
+    const customer = order?.customer || {};
+
+    const mobileCode = (customer.mobile_code || '+966').replace('+', '');
+    const mobile     = (customer.mobile || '').replace(/^0/, '');
+    const phone      = mobileCode + mobile;
+    if (!mobile) { console.warn('⚠️ order-status: no phone'); return; }
+
+    const name     = [customer.first_name, customer.last_name].filter(Boolean).join(' ') || 'عزيزنا';
+    const orderId  = String(order?.reference_id || order?.id || '—');
+    const rawStatus = order?.status?.name || order?.status || '';
+
+    // ترجمة حالات سلة إلى عربي
+    const statusMap = {
+      under_review:  'قيد المراجعة 🔍',
+      in_progress:   'جاري التجهيز 📦',
+      pending:       'قيد الانتظار ⏳',
+      shipping:      'في الطريق إليك 🚚',
+      shipped:       'في الطريق إليك 🚚',
+      out_for_delivery: 'مع المندوب الآن 🛵',
+      delivered:     'تم التوصيل ✅',
+      canceled:      'ملغي ❌',
+      cancelled:     'ملغي ❌',
+      returned:      'تم الإرجاع 🔄',
+    };
+    const statusAr = statusMap[rawStatus] || rawStatus;
+    if (!statusAr) { console.warn('⚠️ order-status: unknown status', rawStatus); return; }
+
+    console.log(`📦 Order status: ${orderId} → ${rawStatus} | ${phone}`);
+
+    await sendTemplate(phone, 'order_tracking', [
+      { type: 'body', parameters: [
+        { type: 'text', text: name },
+        { type: 'text', text: orderId },
+        { type: 'text', text: statusAr },
+      ]},
+    ]);
+    await saveMessage(phone, 'bot', `[order_tracking | order:${orderId} | status:${rawStatus}]`, 'order_tracking');
+
+  } catch (err) {
+    console.error('❌ Salla order-status webhook error:', err.message);
   }
 });
 
