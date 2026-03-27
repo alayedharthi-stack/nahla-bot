@@ -133,9 +133,16 @@ ${knowledge}
 - *مهم جداً:* لا تذكري النسبة أبداً — قولي فقط "عندي مفاجأة لك 🎁"
 - الكوبون يُولَّد تلقائياً بالكود [COUPON:رقم] مثل [COUPON:5]
 
-### 2️⃣ إرسال قالب رابط المتجر
-- متى: عند السؤال عن المتجر أو الطلب
-- الكود: [TEMPLATE:store_link]
+### 2️⃣ إرسال قالب واتساب احترافي
+- عندما تقرري إرسال قالب، اكتبيه وحده في ردك بدون أي نص قبله أو بعده
+- القوالب المتاحة:
+  - [TEMPLATE:store_link] — عند السؤال عن المتجر أو رابط الطلب
+  - [TEMPLATE:contact_owner] — عند طلب التواصل المباشر مع المالك
+  - [TEMPLATE:win_back] — لاستعادة عميل غائب أو لم يشترِ منذ فترة (يُرسل كوبون تلقائياً)
+  - [TEMPLATE:vip_coupon] — للعملاء المميزين VIP فقط (خصم أعلى)
+  - [TEMPLATE:surprise_coupon] — مفاجأة خصم لأي عميل تستحق تحفيزه
+  - [TEMPLATE:coupon_gift] — هدية كوبون في المناسبات أو لتشجيع الشراء
+- ملاحظة: القوالب التي تحتوي كوبون (win_back, vip_coupon, surprise_coupon, coupon_gift) ستُولَّد تلقائياً بالكود والمدة
 
 ### 3️⃣ إرسال قالب التواصل مع المالك
 - متى: عند طلب التواصل المباشر
@@ -432,24 +439,12 @@ async function sendMessage(to, text) {
 }
 
 async function sendTemplate(to, templateName, components = []) {
-  try {
-    await axios.post(WA_URL(), {
-      messaging_product: 'whatsapp', to,
-      type: 'template',
-      template: { name: templateName, language: { code: 'ar' }, components },
-    }, { headers: WA_HEADERS() });
-    console.log(`✅ Template sent: ${templateName} → ${to}`);
-  } catch (err) {
-    console.error(`❌ Template error (${templateName}):`, err.response?.data || err.message);
-    // Fallback نصي إذا فشل القالب
-    const fallbacks = {
-      store_link:     '🛒 تفضل متجرنا: *ayedhoney.com* 🍯',
-      contact_owner:  '👤 للتواصل المباشر مع المالك:\n📞 *+966555906901*',
-      post_purchase:  '🎉 شكراً على طلبك! سنتواصل معك قريباً 🐝',
-      review_request: '🌟 نتمنى أن تمنحنا تقييمك: https://maps.app.goo.gl/WstMVjfaSMckzx8N7',
-    };
-    if (fallbacks[templateName]) await sendMessage(to, fallbacks[templateName]);
-  }
+  await axios.post(WA_URL(), {
+    messaging_product: 'whatsapp', to,
+    type: 'template',
+    template: { name: templateName, language: { code: 'ar' }, components },
+  }, { headers: WA_HEADERS() });
+  console.log(`✅ Template sent: ${templateName} → ${to}`);
 }
 
 // ====================================================
@@ -473,27 +468,45 @@ async function handleMessage(phone, userMessage) {
 
     // ===== معالجة الأوامر التي تقررها نحلة =====
 
-    // 1. قالب رابط المتجر
-    if (botReply.includes('[TEMPLATE:store_link]')) {
-      const textPart = botReply.replace('[TEMPLATE:store_link]', '').trim();
-      if (textPart) await sendMessage(phone, textPart);
-      await sendTemplate(phone, 'store_link');
-      intent = 'store_link';
-      if (textPart) await saveMessage(phone, 'bot', textPart, intent);
+    // 1. قالب واتساب — نحلة تقرر أي قالب ترسل
+    const templateMatch = botReply.match(/\[TEMPLATE:([^\]]+)\]/);
+    if (templateMatch) {
+      const templateName = templateMatch[1];
+      const isVip = customer?.is_vip || false;
+
+      // القوالب التي تحتاج كوبون — تُولَّد تلقائياً
+      const couponTemplates = ['win_back', 'vip_coupon', 'surprise_coupon', 'coupon_gift'];
+      let components = [];
+      let couponCode = null;
+
+      if (couponTemplates.includes(templateName)) {
+        const discount = (templateName === 'vip_coupon' || isVip) ? 12 : 7;
+        const days = (templateName === 'vip_coupon' || isVip) ? 2 : 1;
+        couponCode = await generateUniqueCouponCode();
+        await saveCoupon(phone, couponCode, discount, days);
+        components = [{ type: 'body', parameters: [
+          { type: 'text', text: customer?.name || 'عزيزنا' },
+          { type: 'text', text: String(discount) },
+          { type: 'text', text: couponCode },
+        ]}];
+      }
+
+      try {
+        await sendTemplate(phone, templateName, components);
+        intent = templateName;
+        await saveMessage(phone, 'bot', `[template:${templateName}${couponCode ? ` | coupon:${couponCode}` : ''}]`, intent);
+      } catch (err) {
+        // فشل القالب — نحلة ترد بنص ذكي بدلاً منه
+        console.error(`❌ Template ${templateName} failed, using AI fallback:`, err.response?.data || err.message);
+        const fallbackReply = botReply.replace(/\[TEMPLATE:[^\]]+\]/, '').trim()
+          || await askAI([...messages, { role: 'assistant', content: `أردت إرسال قالب ${templateName} لكنه فشل، أجيبي بنص طبيعي يحقق نفس الهدف.` }]);
+        await sendMessage(phone, fallbackReply);
+        await saveMessage(phone, 'bot', fallbackReply, 'template_fallback');
+      }
       return;
     }
 
-    // 2. قالب التواصل مع المالك
-    if (botReply.includes('[TEMPLATE:contact_owner]')) {
-      const textPart = botReply.replace('[TEMPLATE:contact_owner]', '').trim();
-      if (textPart) await sendMessage(phone, textPart);
-      await sendTemplate(phone, 'contact_owner');
-      intent = 'contact_owner';
-      if (textPart) await saveMessage(phone, 'bot', textPart, intent);
-      return;
-    }
-
-    // 3. كوبون خصم — نحلة تقرر النسبة
+    // 2. كوبون خصم — نحلة تقرر النسبة
     const couponMatch = botReply.match(/\[COUPON:(\d+)\]/);
     if (couponMatch) {
       const isVip  = customer?.is_vip || false;
