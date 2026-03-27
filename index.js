@@ -580,7 +580,12 @@ async function handleMessage(phone, userMessage) {
           ? `📍 ${cityName} على بُعد *${info.km} كم* منا ✅\nمتاح توصيل بمندوب آل عايد — عادةً *نفس اليوم* 🏎️`
           : `📍 ${cityName} على بُعد *${info.km} كم* منا 🚚\nنوصّل عبر *SMSA* خلال 2-3 أيام عمل بإذن الله`;
       } else {
-        reply = `🚚 نوصّل لجميع مناطق المملكة — داخل الطائف نفس اليوم، وباقي المناطق 2-5 أيام عمل`;
+        // تحقق إذا كانت المدينة دولية
+        const intlKeywords = ['الكويت','الإمارات','قطر','البحرين','عمان','الأردن','مصر','لندن','أمريكا','كندا','أوروبا','australia','uk','usa'];
+        const isIntl = intlKeywords.some(k => cityName.toLowerCase().includes(k.toLowerCase()));
+        reply = isIntl
+          ? `🌍 نعم نوصّل لـ *${cityName}* عبر *DHL* 🚀\nالتوصيل خلال 3-7 أيام عمل — الشحن مجاني على طلبات العسل`
+          : `🚚 نوصّل لجميع مناطق المملكة — الطائف نفس اليوم، وباقي المناطق 2-5 أيام\n🌍 وللخليج وأغلب دول العالم عبر *DHL*`;
       }
       await sendMessage(phone, reply);
       await saveMessage(phone, 'bot', reply, 'distance_reply');
