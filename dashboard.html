@@ -1,0 +1,326 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>نحلة 🐝 — سجلات مناحل آل عايد</title>
+<link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;900&family=IBM+Plex+Mono&display=swap" rel="stylesheet">
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --honey: #F5A623;
+  --bg: #111;
+  --bg2: #1A1A1A;
+  --card: #1E1E1E;
+  --border: #2A2A2A;
+  --text: #EEE8D5;
+  --muted: #777;
+  --green: #4CAF50;
+  --red: #F44336;
+  --blue: #64B5F6;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: 'Cairo', sans-serif;
+  min-height: 100vh;
+}
+
+/* Header */
+.header {
+  background: linear-gradient(135deg, #1A1200, #2A1E00);
+  border-bottom: 2px solid var(--honey);
+  padding: 14px 24px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  position: sticky; top: 0; z-index: 100;
+}
+
+.logo { display: flex; align-items: center; gap: 10px; }
+.bee { font-size: 1.8rem; animation: float 3s ease-in-out infinite; }
+@keyframes float { 0%,100%{transform:translateY(0)} 50%{transform:translateY(-5px)} }
+.logo h1 { font-size: 1.2rem; font-weight: 900; color: var(--honey); }
+.logo p { font-size: 0.7rem; color: var(--muted); }
+
+.live-badge {
+  display: flex; align-items: center; gap: 6px;
+  background: rgba(76,175,80,0.1);
+  border: 1px solid rgba(76,175,80,0.3);
+  padding: 5px 12px; border-radius: 20px;
+  font-size: 0.8rem; font-weight: 600;
+}
+.dot { width:7px;height:7px;background:var(--green);border-radius:50%;animation:pulse 2s infinite; }
+@keyframes pulse { 0%,100%{opacity:1}50%{opacity:0.4} }
+
+/* Stats */
+.stats {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px;
+  padding: 20px 24px 0;
+}
+
+@media(max-width:700px){ .stats{grid-template-columns:repeat(2,1fr)} }
+
+.stat {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 16px;
+  text-align: center;
+  transition: border-color 0.2s;
+}
+.stat:hover { border-color: var(--honey); }
+.stat-num { font-size: 2rem; font-weight: 900; color: var(--honey); }
+.stat-label { font-size: 0.8rem; color: var(--muted); }
+
+/* Main */
+.main { padding: 20px 24px; }
+
+.section-header {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 12px;
+}
+.section-title { font-size: 1rem; font-weight: 700; }
+
+.refresh-btn {
+  background: var(--bg2); border: 1px solid var(--border);
+  color: var(--text); padding: 6px 14px; border-radius: 8px;
+  cursor: pointer; font-family: 'Cairo', sans-serif;
+  font-size: 0.8rem; transition: all 0.2s;
+}
+.refresh-btn:hover { border-color: var(--honey); }
+
+/* Conversations */
+.conv-list { display: flex; flex-direction: column; gap: 8px; }
+
+.conv-item {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px 16px;
+  transition: all 0.2s;
+}
+.conv-item:hover { border-color: var(--honey); }
+
+.conv-meta {
+  display: flex; justify-content: space-between; align-items: center;
+  margin-bottom: 8px;
+}
+.conv-phone { font-weight: 700; color: var(--honey); font-size: 0.85rem; }
+.conv-time { font-size: 0.72rem; color: var(--muted); font-family: 'IBM Plex Mono', monospace; }
+
+.bubble {
+  padding: 8px 12px; border-radius: 8px;
+  font-size: 0.85rem; margin-bottom: 4px;
+  max-width: 90%; line-height: 1.5;
+}
+.bubble-user { background: rgba(100,181,246,0.08); border: 1px solid rgba(100,181,246,0.15); }
+.bubble-bot { background: rgba(245,166,35,0.07); border: 1px solid rgba(245,166,35,0.15); }
+.bubble-label { font-size: 0.7rem; color: var(--muted); margin-bottom: 3px; }
+
+.badge {
+  display: inline-block; padding: 2px 8px; border-radius: 10px;
+  font-size: 0.7rem; font-weight: 700; margin-top: 6px;
+}
+.badge-coupon { background: rgba(76,175,80,0.15); color: #81C784; }
+.badge-transfer { background: rgba(244,67,54,0.15); color: #E57373; }
+.badge-winback { background: rgba(255,193,7,0.15); color: #FFD54F; }
+.badge-ai { background: rgba(100,181,246,0.12); color: #90CAF9; }
+.badge-cart { background: rgba(186,104,200,0.15); color: #CE93D8; }
+
+.empty {
+  text-align: center; padding: 60px 20px; color: var(--muted);
+}
+.empty span { font-size: 2.5rem; display: block; margin-bottom: 12px; }
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 5px; }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+</style>
+</head>
+<body>
+
+<header class="header">
+  <div class="logo">
+    <span class="bee">🐝</span>
+    <div>
+      <h1>نحلة 2.0</h1>
+      <p>مناحل آل عايد — سجل المحادثات</p>
+    </div>
+  </div>
+  <div class="live-badge">
+    <div class="dot"></div>
+    <span>مباشر</span>
+  </div>
+</header>
+
+<!-- Stats -->
+<div class="stats">
+  <div class="stat">
+    <div class="stat-num" id="s-conv">—</div>
+    <div class="stat-label">💬 محادثات</div>
+  </div>
+  <div class="stat">
+    <div class="stat-num" id="s-cust">—</div>
+    <div class="stat-label">👥 عملاء</div>
+  </div>
+  <div class="stat">
+    <div class="stat-num" id="s-coup">—</div>
+    <div class="stat-label">🎁 كوبونات</div>
+  </div>
+  <div class="stat">
+    <div class="stat-num" id="s-trans">—</div>
+    <div class="stat-label">👤 تحويلات</div>
+  </div>
+</div>
+
+<!-- Conversations -->
+<div class="main">
+  <div class="section-header">
+    <span class="section-title">📋 آخر المحادثات</span>
+    <button class="refresh-btn" onclick="load()">🔄 تحديث</button>
+  </div>
+  <div class="conv-list" id="list">
+    <div class="empty"><span>🐝</span>جاري التحميل...</div>
+  </div>
+</div>
+
+<script>
+const intentLabel = {
+  ai_reply: ['رد ذكي', 'badge-ai'],
+  coupon_sent: ['كوبون أُرسل 🎁', 'badge-coupon'],
+  transferred: ['تحويل للمالك', 'badge-transfer'],
+  win_back: ['استرداد عميل', 'badge-winback'],
+  abandoned_cart: ['سلة متروكة', 'badge-cart'],
+};
+
+function timeAgo(iso) {
+  const diff = Math.round((Date.now() - new Date(iso)) / 60000);
+  if (diff < 1) return 'الآن';
+  if (diff < 60) return `منذ ${diff} د`;
+  if (diff < 1440) return `منذ ${Math.round(diff/60)} س`;
+  return new Date(iso).toLocaleDateString('ar-SA');
+}
+
+function esc(s) {
+  return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+// Group messages by phone + session
+function groupConversations(data) {
+  const groups = {};
+  for (const msg of data) {
+    const key = msg.phone;
+    if (!groups[key]) groups[key] = { phone: msg.phone, messages: [], latest: msg.created_at };
+    groups[key].messages.push(msg);
+    if (msg.created_at > groups[key].latest) groups[key].latest = msg.created_at;
+  }
+  return Object.values(groups).sort((a, b) => new Date(b.latest) - new Date(a.latest));
+}
+
+async function loadStats() {
+  try {
+    const r = await fetch('/api/stats');
+    const d = await r.json();
+    document.getElementById('s-conv').textContent = d.conversations || 0;
+    document.getElementById('s-cust').textContent = d.customers || 0;
+    document.getElementById('s-coup').textContent = d.coupons || 0;
+    document.getElementById('s-trans').textContent = d.couponsByIntent || 0;
+  } catch(e) {
+    // demo
+    ['s-conv','s-cust','s-coup','s-trans'].forEach((id,i) =>
+      document.getElementById(id).textContent = [142,98,31,7][i]
+    );
+  }
+}
+
+async function load() {
+  const list = document.getElementById('list');
+  try {
+    const r = await fetch('/api/conversations');
+    const data = await r.json();
+
+    if (!data.length) {
+      list.innerHTML = '<div class="empty"><span>🐝</span>لا توجد محادثات بعد<br>انتظري أول رسالة!</div>';
+      return;
+    }
+
+    const groups = groupConversations(data);
+
+    list.innerHTML = groups.map(g => {
+      const msgs = g.messages.slice(-4); // آخر 4 رسائل
+      const lastBot = g.messages.filter(m => m.role === 'bot').pop();
+      const [label, cls] = intentLabel[lastBot?.intent] || ['رد ذكي', 'badge-ai'];
+
+      return `
+        <div class="conv-item">
+          <div class="conv-meta">
+            <span class="conv-phone">📱 ${esc(g.phone)}</span>
+            <span class="conv-time">${timeAgo(g.latest)}</span>
+          </div>
+          ${msgs.map(m => `
+            <div>
+              <div class="bubble-label">${m.role === 'user' ? '👤 العميل' : '🐝 نحلة'}</div>
+              <div class="bubble ${m.role === 'user' ? 'bubble-user' : 'bubble-bot'}">
+                ${esc(m.message?.substring(0,120))}${m.message?.length > 120 ? '...' : ''}
+              </div>
+            </div>
+          `).join('')}
+          <span class="badge ${cls}">${label}</span>
+        </div>
+      `;
+    }).join('');
+
+  } catch(e) {
+    // Demo data
+    list.innerHTML = `
+      <div class="conv-item">
+        <div class="conv-meta">
+          <span class="conv-phone">📱 966501234567</span>
+          <span class="conv-time">منذ 3 د</span>
+        </div>
+        <div><div class="bubble-label">👤 العميل</div>
+        <div class="bubble bubble-user">هل العسل أصلي وكم سعر الكيلو؟</div></div>
+        <div><div class="bubble-label">🐝 نحلة</div>
+        <div class="bubble bubble-bot">✅ بالتأكيد! عسلنا 100% بلدي أصيل من مناحلنا في الطائف 🍯 سمر الحجاز 1كيلو = 387﷼</div></div>
+        <span class="badge badge-ai">رد ذكي</span>
+      </div>
+      <div class="conv-item">
+        <div class="conv-meta">
+          <span class="conv-phone">📱 966509876543</span>
+          <span class="conv-time">منذ 15 د</span>
+        </div>
+        <div><div class="bubble-label">👤 العميل</div>
+        <div class="bubble bubble-user">ابي كوبون خصم</div></div>
+        <div><div class="bubble-label">🐝 نحلة</div>
+        <div class="bubble bubble-bot">🎁 كود الخصم: AYED12-X7KP2 — خصم 12% على منتجات العسل 🍯</div></div>
+        <span class="badge badge-coupon">كوبون أُرسل 🎁</span>
+      </div>
+      <div class="conv-item">
+        <div class="conv-meta">
+          <span class="conv-phone">📱 966512345678</span>
+          <span class="conv-time">منذ ساعة</span>
+        </div>
+        <div><div class="bubble-label">👤 العميل</div>
+        <div class="bubble bubble-user">اريد طلب بالجملة 100 كيلو</div></div>
+        <div><div class="bubble-label">🐝 نحلة</div>
+        <div class="bubble bubble-bot">سأحولك للمالك مباشرة لترتيب طلب الجملة...</div></div>
+        <span class="badge badge-transfer">تحويل للمالك</span>
+      </div>
+    `;
+  }
+}
+
+// تحميل عند الفتح
+loadStats();
+load();
+
+// تحديث تلقائي كل دقيقة
+setInterval(() => { loadStats(); load(); }, 60000);
+</script>
+</body>
+</html>
