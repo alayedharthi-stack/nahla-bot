@@ -1,0 +1,16 @@
+# المفاتيح السرية — لا ترفع أبداً
+.env
+.env.local
+.env.*.local
+
+# التبعيات
+node_modules/
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS
+.DS_Store
+Thumbs.db
+.claude/

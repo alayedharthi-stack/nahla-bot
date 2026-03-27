@@ -1,0 +1,19 @@
+{
+  "name": "nahla-v2",
+  "version": "2.0.0",
+  "description": "نحلة 2.0 🐝 — OpenAI → Claude → Gemini",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "nodemon index.js"
+  },
+  "dependencies": {
+    "@google/generative-ai": "^0.21.0",
+    "@supabase/supabase-js": "^2.45.0",
+    "axios": "^1.7.0",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "express-rate-limit": "^7.5.1",
+    "node-cron": "^3.0.3"
+  }
+}
