@@ -41,6 +41,9 @@ const CONFIG = {
   // Auth للـ API الداخلي
   apiSecret:   process.env.API_SECRET,
 
+  // Google Maps
+  googleMapsKey: process.env.GOOGLE_MAPS_API_KEY,
+
   // سلة — OAuth2
   sallaClientId:     process.env.SALLA_CLIENT_ID,
   sallaClientSecret: process.env.SALLA_CLIENT_SECRET,
@@ -435,6 +438,35 @@ const WA_HEADERS = () => ({
   'Content-Type': 'application/json',
 });
 
+// موقع مناحل آل عايد (الطائف)
+const STORE_LAT = 21.2854;
+const STORE_LNG = 40.4155;
+
+// حساب المسافة بالكيلومتر وتحديد نوع التوصيل
+async function getDeliveryInfo(lat, lng) {
+  if (!CONFIG.googleMapsKey) return null;
+  try {
+    const { data } = await axios.get('https://maps.googleapis.com/maps/api/distancematrix/json', {
+      params: {
+        origins:      `${STORE_LAT},${STORE_LNG}`,
+        destinations: `${lat},${lng}`,
+        key:          CONFIG.googleMapsKey,
+        language:     'ar',
+        units:        'metric',
+      },
+    });
+    const element = data.rows?.[0]?.elements?.[0];
+    if (element?.status !== 'OK') return null;
+    const km       = Math.round(element.distance.value / 1000);
+    const duration = element.duration.text;
+    const sameDay  = km <= 60; // الطائف ومحيطها
+    return { km, duration, sameDay };
+  } catch (err) {
+    console.error('❌ Maps API error:', err.message);
+    return null;
+  }
+}
+
 async function sendMessage(to, text) {
   try {
     await axios.post(WA_URL(), {
@@ -701,6 +733,27 @@ app.post('/webhook', webhookLimiter, async (req, res) => {
       processedMsgIds.add(msg.id);
       // تنظيف المعرّف بعد 10 دقائق
       setTimeout(() => processedMsgIds.delete(msg.id), 10 * 60 * 1000);
+
+      if (msg.type === 'location') {
+        // رسالة موقع — نحسب المسافة ونرد بمعلومات التوصيل
+        const { latitude, longitude } = msg.location;
+        console.log(`📍 ${msg.from}: location ${latitude},${longitude}`);
+        await saveCustomer(msg.from);
+        const info = await getDeliveryInfo(latitude, longitude);
+        let reply;
+        if (info) {
+          reply = info.sameDay
+            ? `📍 موقعك على بُعد *${info.km} كم* منا 🚗\n✅ التوصيل بمندوب آل عايد متاح — عادةً *نفس اليوم* 🏎️`
+            : `📍 موقعك على بُعد *${info.km} كم* منا\n🚚 التوصيل عبر *SMSA* — يصلك خلال 2-3 أيام عمل بإذن الله`;
+        } else {
+          reply = `📍 وصلني موقعك! 🐝\nنوصّل لجميع مناطق المملكة — داخل الطائف نفس اليوم، وباقي المناطق 2-5 أيام عمل 🚚`;
+        }
+        await sendMessage(msg.from, reply);
+        await saveMessage(msg.from, 'bot', reply, 'location_reply');
+        continue;
+      }
+
+      if (msg.type !== 'text') continue; // تجاهل أنواع أخرى (صوت، صورة...)
 
       console.log(`📩 ${msg.from}: ${msg.text.body}`);
       await handleMessage(msg.from, msg.text.body);
