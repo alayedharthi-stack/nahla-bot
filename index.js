@@ -1170,7 +1170,51 @@ app.post('/webhook', webhookLimiter, async (req, res) => {
       // رسالة نصية
       const text = msg.text.body;
 
-      // كشف رابط خرائط أبل
+      // كشف رابط مكان مختصر من Apple Maps (maps.apple.com/p/...)
+      const appleMapsPlaceMatch = text.match(/maps\.apple\.com\/p\/([A-Za-z0-9~_\-]+)/);
+      if (appleMapsPlaceMatch) {
+        console.log(`📍 ${msg.from}: Apple Maps place link`);
+        let lat = null, lng = null;
+        try {
+          const resp = await axios.get(
+            `https://maps.apple.com/p/${appleMapsPlaceMatch[1]}`,
+            { maxRedirects: 10, timeout: 6000, headers: { 'User-Agent': 'Mozilla/5.0' } }
+          );
+          // إحداثيات في الـ URL النهائي بعد الـ redirect
+          const finalUrl = resp.request?.res?.responseUrl || resp.config?.url || '';
+          const llMatch  = finalUrl.match(/ll=([-\d.]+),([-\d.]+)/);
+          if (llMatch) { lat = parseFloat(llMatch[1]); lng = parseFloat(llMatch[2]); }
+          // أو داخل HTML الصفحة
+          if (!lat) {
+            const htmlMatch = String(resp.data).match(/"latitude":([-\d.]+),"longitude":([-\d.]+)/);
+            if (htmlMatch) { lat = parseFloat(htmlMatch[1]); lng = parseFloat(htmlMatch[2]); }
+          }
+        } catch (e) { console.warn('Apple Maps place resolve failed:', e.message); }
+
+        if (lat && lng) {
+          const plDraft = await getOrderDraft(msg.from);
+          if (plDraft?.step === 'collecting_address') {
+            await saveMessage(msg.from, 'user', `[apple-maps-place:${lat},${lng}]`);
+            await handleOrderFlow(msg.from, `__LOCATION__:${lat},${lng}`, plDraft);
+            continue;
+          }
+          const info  = await getDeliveryInfo(lat, lng);
+          const reply = info
+            ? (info.sameDay
+                ? `📍 موقعك على بُعد *${info.km} كم* منا ✅\nالتوصيل بمندوب آل عايد — عادةً *نفس اليوم* 🏎️`
+                : `📍 موقعك على بُعد *${info.km} كم* منا\n🚚 التوصيل عبر *SMSA* — 2-3 أيام عمل بإذن الله`)
+            : `📍 وصلني موقعك! 🐝\nنوصّل لجميع مناطق المملكة 🚚`;
+          await sendMessage(msg.from, reply);
+          await saveMessage(msg.from, 'bot', reply, 'location_reply');
+        } else {
+          // فشل الحل → نخلّي نحلة تطلب الموقع بطريقة أخرى
+          await sendMessage(msg.from, `📍 ما أقدر أقرأ هذا الرابط مباشرة\n\nاضغط 📎 ← الموقع ← *موقعي الحالي* وأرسله لي 🐝`);
+          await saveMessage(msg.from, 'bot', '[apple-maps-place: unresolved]', 'location_reply');
+        }
+        continue;
+      }
+
+      // كشف رابط خرائط أبل العادي (مع إحداثيات مباشرة)
       const appleMapsMatch = text.match(/maps\.apple\.com[^?]*\?[^#]*ll=([-\d.]+),([-\d.]+)/);
       if (appleMapsMatch) {
         const lat = parseFloat(appleMapsMatch[1]);
