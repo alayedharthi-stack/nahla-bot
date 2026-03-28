@@ -65,8 +65,7 @@ if (!CONFIG.waVerify) {
 // ====================================================
 // 🔗 الاتصالات
 // ====================================================
-const supabase        = createClient(CONFIG.supabaseUrl, CONFIG.supabaseKey);
-const supabaseStorage = createClient(CONFIG.supabaseUrl, CONFIG.supabaseServiceKey || CONFIG.supabaseKey);
+const supabase = createClient(CONFIG.supabaseUrl, CONFIG.supabaseKey);
 const genAI    = new GoogleGenerativeAI(CONFIG.geminiKey);
 const gemini   = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
 
@@ -833,7 +832,7 @@ async function uploadAudioToStorage(buffer, mimeType, phone) {
       : mimeType.includes('mpeg') ? 'mp3'
       : 'ogg';
     const fileName = `${phone}_${Date.now()}.${ext}`;
-    const { data: uploadData, error } = await supabaseStorage.storage
+    const { data: uploadData, error } = await supabase.storage
       .from('voice-messages')
       .upload(fileName, buffer, { contentType: mimeType, upsert: false });
     if (error) {
@@ -841,7 +840,7 @@ async function uploadAudioToStorage(buffer, mimeType, phone) {
       return null;
     }
     console.log('✅ Storage upload success:', uploadData?.path);
-    const { data } = supabaseStorage.storage.from('voice-messages').getPublicUrl(fileName);
+    const { data } = supabase.storage.from('voice-messages').getPublicUrl(fileName);
     console.log('🔗 Public URL:', data?.publicUrl);
     return data?.publicUrl || null;
   } catch (err) {
