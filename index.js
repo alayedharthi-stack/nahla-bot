@@ -1177,12 +1177,11 @@ app.post('/webhook', webhookLimiter, async (req, res) => {
       processedMsgIds.add(msg.id);
       setTimeout(() => processedMsgIds.delete(msg.id), 10 * 60 * 1000);
 
-      await saveCustomer(msg.from);
-
       // رسالة موقع WhatsApp
       if (msg.type === 'location') {
         const { latitude, longitude } = msg.location;
         console.log(`📍 ${msg.from}: location ${latitude},${longitude}`);
+        await saveCustomer(msg.from);
 
         // إذا كان في مسار الطلب (خطوة العنوان) → وجّه للطلب
         const locDraft = await getOrderDraft(msg.from);
