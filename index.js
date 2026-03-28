@@ -535,22 +535,26 @@ async function handleOrderFlow(phone, userMessage, draft) {
       return;
     }
 
-    // استخراج المدينة من الرمز مباشرة (بدون Google)
-    const cityData = getCityFromNationalAddress(national_address);
-    const info     = cityData ? await getDeliveryInfo(cityData.lat, cityData.lng) : null;
-    const isTaif   = info?.sameDay || false;
+    // نحفظ الرمز ونسأل عن المدينة (لا نستنتجها من الرمز — غير موثوق)
+    await saveOrderDraft(phone, { national_address, step: 'collecting_city' });
+    await sendMessage(phone,
+      `✅ وصلني رمز عنوانك *${national_address}*\n\n` +
+      `اكتب اسم مدينتك لأحدد طريقة التوصيل\nمثال: الرياض | جدة | الطائف`
+    );
+    return;
+  }
 
-    await saveOrderDraft(phone, {
-      national_address,
-      city:    cityData?.name || draft.city || 'الطائف',
-      is_taif: isTaif,
-    });
-
+  // ── الخطوة 2b: اسم المدينة (بعد كتابة الرمز الوطني) ──
+  if (step === 'collecting_city') {
+    const coords = await geocodeCity(msg);
+    const info   = coords ? await getDeliveryInfo(coords.lat, coords.lng) : null;
+    const isTaif = info?.sameDay || false;
+    await saveOrderDraft(phone, { city: msg.trim(), is_taif: isTaif });
     await _proceedAfterAddress(phone, isTaif, info);
     return;
   }
 
-  // ── الخطوة 2b: رمز وطني بعد مشاركة الموقع ──
+  // ── الخطوة 2c: رمز وطني بعد مشاركة الموقع (المدينة معروفة من GPS) ──
   if (step === 'collecting_national_address') {
     const nationalMatch    = msg.match(/\b([A-Z]{4}\d{4})\b/i);
     const national_address = nationalMatch ? nationalMatch[1].toUpperCase() : null;
@@ -762,46 +766,6 @@ async function getDeliveryInfo(lat, lng) {
     console.error('❌ Maps API error:', err.message);
     return null;
   }
-}
-
-// ====================================================
-// 🗺️ رموز مدن المملكة — أول حرفين من العنوان الوطني
-// ====================================================
-const SAUDI_CITY_CODES = {
-  'RY': { name: 'الرياض',          lat: 24.7136, lng: 46.6753 },
-  'JD': { name: 'جدة',             lat: 21.4858, lng: 39.1925 },
-  'MK': { name: 'مكة المكرمة',     lat: 21.3891, lng: 39.8579 },
-  'MD': { name: 'المدينة المنورة',  lat: 24.5247, lng: 39.5692 },
-  'TA': { name: 'الطائف',          lat: 21.2854, lng: 40.4155 },
-  'DA': { name: 'الدمام',          lat: 26.4207, lng: 50.0888 },
-  'DM': { name: 'الدمام',          lat: 26.4207, lng: 50.0888 },
-  'KH': { name: 'الخبر',           lat: 26.2172, lng: 50.1971 },
-  'DH': { name: 'الظهران',         lat: 26.3028, lng: 50.1522 },
-  'AB': { name: 'أبها',            lat: 18.2164, lng: 42.5053 },
-  'KM': { name: 'خميس مشيط',       lat: 18.3059, lng: 42.7306 },
-  'JZ': { name: 'جيزان',           lat: 16.8892, lng: 42.5511 },
-  'NA': { name: 'نجران',           lat: 17.4927, lng: 44.1328 },
-  'HA': { name: 'حائل',            lat: 27.5219, lng: 41.6911 },
-  'HY': { name: 'حائل',            lat: 27.5219, lng: 41.6911 },
-  'TB': { name: 'تبوك',            lat: 28.3838, lng: 36.5550 },
-  'BA': { name: 'الباحة',          lat: 20.0129, lng: 41.4677 },
-  'SK': { name: 'سكاكا',           lat: 29.9697, lng: 40.2064 },
-  'BU': { name: 'بريدة',           lat: 26.3292, lng: 43.9750 },
-  'QS': { name: 'القصيم',          lat: 26.3292, lng: 43.9750 },
-  'YN': { name: 'ينبع',            lat: 24.0895, lng: 38.0618 },
-  'BI': { name: 'بيشة',            lat: 19.9975, lng: 42.6049 },
-  'KF': { name: 'حفر الباطن',      lat: 28.4347, lng: 45.9647 },
-  'UQ': { name: 'عرعر',            lat: 30.9753, lng: 41.0381 },
-  'QL': { name: 'القريات',         lat: 31.3325, lng: 37.3444 },
-  'RB': { name: 'رابغ',            lat: 22.7996, lng: 38.9971 },
-  'WJ': { name: 'الوجه',           lat: 26.5833, lng: 36.4500 },
-  'ZL': { name: 'الزلفي',          lat: 26.2966, lng: 44.8143 },
-};
-
-// استخراج مدينة من رمز العنوان الوطني (TAPA7401 → الطائف + إحداثياتها)
-function getCityFromNationalAddress(code) {
-  const prefix = code.substring(0, 2).toUpperCase();
-  return SAUDI_CITY_CODES[prefix] || null;
 }
 
 // عكس الإحداثيات → اسم المدينة والحي (لمشاركة الموقع من واتساب)
@@ -1244,14 +1208,8 @@ app.post('/webhook', webhookLimiter, async (req, res) => {
           continue;
         }
 
-        // خارج مسار الطلب → رد بمعلومات التوصيل من جدول المدن
-        const cityData = getCityFromNationalAddress(shortAddress);
-        const info     = cityData ? await getDeliveryInfo(cityData.lat, cityData.lng) : null;
-        const reply    = info
-          ? (info.sameDay
-              ? `🏠 عنوانك الوطني *${shortAddress}* — *${cityData.name}* ✅\nالتوصيل بمندوب آل عايد — عادةً *نفس اليوم* 🏎️`
-              : `🏠 عنوانك الوطني *${shortAddress}* — *${cityData?.name || ''}*\n🚚 التوصيل عبر *SMSA* خلال 2-3 أيام عمل بإذن الله`)
-          : `🏠 وصلني عنوانك *${shortAddress}* 🐝\nنوصّل لجميع مناطق المملكة — الطائف نفس اليوم، وباقي المناطق 2-5 أيام 🚚`;
+        // خارج مسار الطلب → رد عام (لا يمكن استنتاج المدينة من الرمز بموثوقية)
+        const reply = `🏠 وصلني عنوانك *${shortAddress}* ✅\nنوصّل لجميع مناطق المملكة — الطائف نفس اليوم، وباقي المناطق 2-5 أيام 🚚\n\n📌 شارك موقعك لأحسب المسافة بدقة`;
         await sendMessage(msg.from, reply);
         await saveMessage(msg.from, 'bot', reply, 'national_address_reply');
         continue;
