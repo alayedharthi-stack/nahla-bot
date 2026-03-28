@@ -822,29 +822,26 @@ async function downloadWhatsAppMedia(mediaId) {
   return { buffer: Buffer.from(buffer), mimeType: meta.mime_type };
 }
 
-// رفع ملف الصوت إلى Supabase Storage
+// رفع ملف الصوت إلى Supabase Storage عبر REST مباشرة
 async function uploadAudioToStorage(buffer, mimeType, phone) {
   try {
-    const hasServiceKey = !!CONFIG.supabaseServiceKey;
-    console.log(`🎙️ Upload attempt | serviceKey:${hasServiceKey} | mime:${mimeType} | size:${buffer.length}`);
     const ext = mimeType.includes('ogg') ? 'ogg'
       : mimeType.includes('mp4') ? 'mp4'
       : mimeType.includes('mpeg') ? 'mp3'
       : 'ogg';
     const fileName = `${phone}_${Date.now()}.${ext}`;
-    const { data: uploadData, error } = await supabase.storage
-      .from('voice-messages')
-      .upload(fileName, buffer, { contentType: mimeType, upsert: false });
-    if (error) {
-      console.error('❌ Storage upload error:', JSON.stringify(error));
-      return null;
-    }
-    console.log('✅ Storage upload success:', uploadData?.path);
-    const { data } = supabase.storage.from('voice-messages').getPublicUrl(fileName);
-    console.log('🔗 Public URL:', data?.publicUrl);
-    return data?.publicUrl || null;
+    const key = CONFIG.supabaseServiceKey || CONFIG.supabaseKey;
+    console.log(`🎙️ Uploading ${fileName} (${buffer.length} bytes)`);
+    await axios.post(
+      `${CONFIG.supabaseUrl}/storage/v1/object/voice-messages/${fileName}`,
+      buffer,
+      { headers: { Authorization: `Bearer ${key}`, 'Content-Type': mimeType } }
+    );
+    const publicUrl = `${CONFIG.supabaseUrl}/storage/v1/object/public/voice-messages/${fileName}`;
+    console.log('✅ Uploaded:', publicUrl);
+    return publicUrl;
   } catch (err) {
-    console.error('❌ uploadAudioToStorage exception:', err.message);
+    console.error('❌ uploadAudioToStorage:', err.response?.data || err.message);
     return null;
   }
 }
