@@ -161,7 +161,8 @@ ${knowledge}
   → ردّي **فقط** بـ [DISTANCE:اسم المدينة] بدون أي نص آخر
   → أمثلة: [DISTANCE:الرياض] أو [DISTANCE:جدة] أو [DISTANCE:أبها]
 - **لا تعطي معلومات التوصيل يدوياً** — دائماً استخدمي الأمر ليحسب تلقائياً
-- إذا لم تعرفي المدينة اسأليها عن أقرب مدينة كبيرة
+- إذا لم تعرفي المدينة اسأليها عن أقرب مدينة كبيرة أو عنوانها الوطني المختصر
+- العنوان الوطني المختصر: 4 أحرف + 4 أرقام مثل RYDA1234 — إذا أرسله العميل يُعالَج تلقائياً
 
 ### 6️⃣ التواصل الذكي مع محتوى آل عايد
 - إذا سأل العميل عن طريقة تربية النحل، إنتاج العسل، المناحل، أو أراد التحقق من الأصالة:
@@ -820,6 +821,24 @@ app.post('/webhook', webhookLimiter, async (req, res) => {
           : `📍 وصلني موقعك! 🐝\nنوصّل لجميع مناطق المملكة 🚚`;
         await sendMessage(msg.from, reply);
         await saveMessage(msg.from, 'bot', reply, 'location_reply');
+        continue;
+      }
+
+      // كشف العنوان الوطني السعودي المختصر — مثال: RYDA1234 أو JDAH5678
+      const nationalAddressMatch = text.match(/\b([A-Z]{4}\d{4})\b/i);
+      if (nationalAddressMatch) {
+        const shortAddress = nationalAddressMatch[1].toUpperCase();
+        console.log(`🏠 ${msg.from}: National Address ${shortAddress}`);
+        await saveCustomer(msg.from);
+        const coords = await geocodeCity(`${shortAddress}, Saudi Arabia`);
+        const info   = coords ? await getDeliveryInfo(coords.lat, coords.lng) : null;
+        const reply  = info
+          ? (info.sameDay
+              ? `🏠 عنوانك الوطني *${shortAddress}*\n📍 على بُعد *${info.km} كم* منا ✅\nالتوصيل بمندوب آل عايد — عادةً *نفس اليوم* 🏎️`
+              : `🏠 عنوانك الوطني *${shortAddress}*\n📍 على بُعد *${info.km} كم* منا\n🚚 التوصيل عبر *SMSA* خلال 2-3 أيام عمل بإذن الله`)
+          : `🏠 وصلني عنوانك *${shortAddress}* 🐝\nنوصّل لجميع مناطق المملكة — الطائف نفس اليوم، وباقي المناطق 2-5 أيام 🚚`;
+        await sendMessage(msg.from, reply);
+        await saveMessage(msg.from, 'bot', reply, 'national_address_reply');
         continue;
       }
 
