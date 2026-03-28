@@ -133,8 +133,9 @@ ${knowledge}
   → استخدمي [START_ORDER:اسم_المنتج:الكمية]
   → أمثلة: [START_ORDER:سمر الحجاز 1:1] أو [START_ORDER:سدر 500:2]
 - المنتجات المتاحة للطلب: سمر الحجاز (250/500/1كيلو) | طلح نجد (250/500/1كيلو) | سدر (250/500/1كيلو) | ضهيان (250/500/1كيلو) | سمن بقر (300جم/1كيلو) | سمن غنم
-- الكود: [START_ORDER:المنتج:الكمية] — يبدأ تلقائياً خطوات جمع معلومات العميل
+- الكود: [START_ORDER:المنتج:الكمية] — سيطلب الاسم ورمز العنوان الوطني فقط، ثم يُنشئ الطلب تلقائياً
 - يمكن إضافة نص قبل الأمر: "ممتاز، سأجهز طلبك الآن [START_ORDER:سمر الحجاز 1:1]"
+- إذا أراد العميل أن يطلب بنفسه من الموقع: [STORE_ORDER]
 
 ### 2️⃣ إرسال كوبون خصم
 - متى: عند التردد في الشراء، طلب الخصم، أو الحاجة لتحفيز
@@ -418,7 +419,6 @@ async function createSallaOrder(draft) {
       last_name:   draft.last_name,
       mobile:      mobile,
       mobile_code: `+${mobileCode}`,
-      gender:      draft.gender, // 'male' | 'female'
     },
     shipping: {
       free_shipping: true,
@@ -444,6 +444,22 @@ async function createSallaOrder(draft) {
   return data?.data;
 }
 
+// مشترك: بعد معرفة العنوان والطائف/خارجه — ننتقل للتوصيل أو التأكيد
+async function _proceedAfterAddress(phone, isTaif, info) {
+  if (isTaif) {
+    await saveOrderDraft(phone, { step: 'selecting_delivery' });
+    await sendMessage(phone, `📍 عنوانك داخل نطاق الطائف ✅\n\nاختر طريقة الاستلام:\n1️⃣ مندوب آل عايد — يوصّلك للباب 🏎️\n2️⃣ استلام من الفرع بنفسك 📍`);
+  } else {
+    const method = (info?.km > 2000) ? 'dhl' : 'smsa';
+    await saveOrderDraft(phone, { delivery_method: method, step: 'confirming' });
+    const updatedDraft = await (async () => {
+      const { data } = await supabase.from('order_drafts').select('*').eq('phone', phone).single();
+      return data;
+    })();
+    await sendSummary(phone, updatedDraft);
+  }
+}
+
 async function handleOrderFlow(phone, userMessage, draft) {
   const msg = userMessage.trim();
 
@@ -456,20 +472,7 @@ async function handleOrderFlow(phone, userMessage, draft) {
 
   const step = draft.step;
 
-  // ── الخطوة 1: الجنس ──
-  if (step === 'collecting_gender') {
-    const male   = /ذكر|رجل|أخ|^1$/i.test(msg);
-    const female = /أنثى|انثى|امرأة|أخت|^2$/i.test(msg);
-    if (!male && !female) {
-      await sendMessage(phone, '👤 الجنس:\n1️⃣ ذكر\n2️⃣ أنثى');
-      return;
-    }
-    await saveOrderDraft(phone, { gender: male ? 'male' : 'female', step: 'collecting_name' });
-    await sendMessage(phone, '✍️ اكتب اسمك الأول واسم العائلة\nمثال: محمد العمري');
-    return;
-  }
-
-  // ── الخطوة 2: الاسم ──
+  // ── الخطوة 1: الاسم ──
   if (step === 'collecting_name') {
     const parts = msg.split(/\s+/).filter(Boolean);
     if (parts.length < 2) {
@@ -481,54 +484,85 @@ async function handleOrderFlow(phone, userMessage, draft) {
       last_name:  parts.slice(1).join(' '),
       step: 'collecting_address',
     });
-    await sendMessage(phone, `شكراً ${parts[0]}! 🐝\n\nأرسل عنوانك الوطني المختصر\nمثال: RYDA1234\n\nأو اكتب اسم مدينتك`);
+    await sendMessage(phone, `شكراً ${parts[0]}! 🐝\n\n📍 الآن أرسل رمز عنوانك الوطني المختصر\nمثال: *RYDA1234*\n\nأو 📌 *شارك موقعك* مباشرة من واتساب وأنا أملأ العنوان تلقائياً`);
     return;
   }
 
-  // ── الخطوة 3: العنوان (مدينة أو عنوان وطني) ──
+  // ── الخطوة 2: العنوان — موقع واتساب أو رمز وطني ──
   if (step === 'collecting_address') {
-    const nationalMatch    = msg.match(/\b([A-Z]{4}\d{4})\b/i);
-    const national_address = nationalMatch ? nationalMatch[1].toUpperCase() : null;
-    const city             = national_address ? null : msg;
-
-    await saveOrderDraft(phone, { national_address, city: city || draft.city });
-
-    const coords = await geocodeCity(national_address || city);
-    const info   = coords ? await getDeliveryInfo(coords.lat, coords.lng) : null;
-    const isTaif = info?.sameDay || false;
-    await saveOrderDraft(phone, { is_taif: isTaif, city: city || draft.city || 'الطائف' });
-
-    // إذا لم يرسل عنوان وطني → نطلب الحي لإكمال بيانات الشحن
-    if (!national_address) {
-      await saveOrderDraft(phone, { step: 'collecting_neighborhood' });
-      await sendMessage(phone, `📍 شكراً! اكتب اسم الحي\nمثال: حي السلامة`);
+    // حالة أ: مشاركة الموقع من واتساب (تصل كـ __LOCATION__:lat,lng)
+    const locationMatch = msg.match(/^__LOCATION__:([-\d.]+),([-\d.]+)$/);
+    if (locationMatch) {
+      const lat = parseFloat(locationMatch[1]);
+      const lng = parseFloat(locationMatch[2]);
+      const [geoInfo, info] = await Promise.all([
+        reverseGeocode(lat, lng),
+        getDeliveryInfo(lat, lng),
+      ]);
+      const isTaif = info?.sameDay || false;
+      const cityName = geoInfo?.city || draft.city || 'غير محدد';
+      await saveOrderDraft(phone, {
+        city:         cityName,
+        neighborhood: geoInfo?.neighborhood || null,
+        is_taif:      isTaif,
+        step:         'collecting_national_address',
+      });
+      const locationDesc = geoInfo?.neighborhood
+        ? `${cityName} — ${geoInfo.neighborhood}`
+        : cityName;
+      await sendMessage(phone,
+        `✅ وصلني موقعك!\n📍 *${locationDesc}*\n` +
+        (isTaif
+          ? `🏎️ أنت في نطاق الطائف — التوصيل نفس اليوم!\n\n`
+          : `🚚 التوصيل عبر SMSA — 2-3 أيام عمل\n\n`) +
+        `خطوة أخيرة: أرسل رمز عنوانك الوطني\nمثال: *RYDA1234*\n\n` +
+        `للحصول عليه: *sp.com.sa* أو تطبيق أبشر ← العناوين`
+      );
       return;
     }
 
-    // عنوان وطني → ننتقل مباشرة لاختيار التوصيل
-    if (isTaif) {
-      await saveOrderDraft(phone, { step: 'selecting_delivery' });
-      await sendMessage(phone, `📍 عنوانك داخل نطاق الطائف ✅\n\nاختر طريقة الاستلام:\n1️⃣ مندوب آل عايد — يوصّلك للباب 🏎️\n2️⃣ استلام من الفرع بنفسك 📍`);
-    } else {
-      const method = (info && info.km > 2000) ? 'dhl' : 'smsa';
-      await saveOrderDraft(phone, { delivery_method: method, step: 'confirming' });
-      await sendSummary(phone, { ...draft, national_address, city: city || draft.city, delivery_method: method });
+    // حالة ب: رمز العنوان الوطني نصاً
+    const nationalMatch    = msg.match(/\b([A-Z]{4}\d{4})\b/i);
+    const national_address = nationalMatch ? nationalMatch[1].toUpperCase() : null;
+
+    if (!national_address) {
+      await sendMessage(phone,
+        `📍 أحتاج *رمز العنوان الوطني المختصر* — إلزامي للشحن\n\n` +
+        `الرمز شكله: 4 أحرف + 4 أرقام\nمثال: *RYDA1234*\n\n` +
+        `أو 📌 *شارك موقعك* مباشرة من واتساب\n\n` +
+        `للحصول على الرمز: *sp.com.sa* أو تطبيق أبشر`
+      );
+      return;
     }
+
+    // استخراج المدينة من الرمز مباشرة (بدون Google)
+    const cityData = getCityFromNationalAddress(national_address);
+    const info     = cityData ? await getDeliveryInfo(cityData.lat, cityData.lng) : null;
+    const isTaif   = info?.sameDay || false;
+
+    await saveOrderDraft(phone, {
+      national_address,
+      city:    cityData?.name || draft.city || 'الطائف',
+      is_taif: isTaif,
+    });
+
+    await _proceedAfterAddress(phone, isTaif, info);
     return;
   }
 
-  // ── الخطوة 3b: الحي (إذا لم يكن عنده عنوان وطني) ──
-  if (step === 'collecting_neighborhood') {
-    await saveOrderDraft(phone, { neighborhood: msg, step: draft.is_taif ? 'selecting_delivery' : 'confirming' });
-    const updatedDraft = { ...draft, neighborhood: msg };
+  // ── الخطوة 2b: رمز وطني بعد مشاركة الموقع ──
+  if (step === 'collecting_national_address') {
+    const nationalMatch    = msg.match(/\b([A-Z]{4}\d{4})\b/i);
+    const national_address = nationalMatch ? nationalMatch[1].toUpperCase() : null;
 
-    if (draft.is_taif) {
-      await sendMessage(phone, `📍 عنوانك داخل نطاق الطائف ✅\n\nاختر طريقة الاستلام:\n1️⃣ مندوب آل عايد — يوصّلك للباب 🏎️\n2️⃣ استلام من الفرع بنفسك 📍`);
-    } else {
-      const method = (draft.city && draft.city.includes('دول')) ? 'dhl' : 'smsa';
-      await saveOrderDraft(phone, { delivery_method: method });
-      await sendSummary(phone, { ...updatedDraft, delivery_method: method });
+    if (!national_address) {
+      await sendMessage(phone,
+        `📍 أرسل رمز العنوان الوطني فقط\nمثال: *RYDA1234*\n\nللحصول عليه: *sp.com.sa*`
+      );
+      return;
     }
+    await saveOrderDraft(phone, { national_address });
+    await _proceedAfterAddress(phone, draft.is_taif, null);
     return;
   }
 
@@ -564,8 +598,11 @@ async function handleOrderFlow(phone, userMessage, draft) {
       await saveMessage(phone, 'bot', `[order_created | id:${orderId}]`, 'order_created');
     } catch (err) {
       console.error('❌ Salla create order:', err.response?.data || err.message);
-      await sendMessage(phone, '🙏 عذراً، حدث خطأ في إنشاء الطلب\nسنتواصل معك مباشرة');
-      await sendMessage(CONFIG.ownerPhone, `⚠️ فشل إنشاء طلب\nالعميل: ${phone}\nالخطأ: ${err.message}`);
+      await clearOrderDraft(phone);
+      await sendMessage(phone, '🙏 عذراً، حصل خطأ في إنشاء الطلب\n\nأكمل طلبك مباشرة من المتجر:\n🛒 *ayedhoney.com*');
+      await sendMessage(CONFIG.ownerPhone,
+        `⚠️ *فشل إنشاء طلب تلقائي*\n📱 العميل: ${phone}\n📦 المنتج: ${draft.items?.map(i => `${i.name} ×${i.quantity}`).join(', ') || '—'}\n❌ الخطأ: ${err.response?.data?.message || err.message}`
+      );
     }
     return;
   }
@@ -727,6 +764,75 @@ async function getDeliveryInfo(lat, lng) {
   }
 }
 
+// ====================================================
+// 🗺️ رموز مدن المملكة — أول حرفين من العنوان الوطني
+// ====================================================
+const SAUDI_CITY_CODES = {
+  'RY': { name: 'الرياض',          lat: 24.7136, lng: 46.6753 },
+  'JD': { name: 'جدة',             lat: 21.4858, lng: 39.1925 },
+  'MK': { name: 'مكة المكرمة',     lat: 21.3891, lng: 39.8579 },
+  'MD': { name: 'المدينة المنورة',  lat: 24.5247, lng: 39.5692 },
+  'TA': { name: 'الطائف',          lat: 21.2854, lng: 40.4155 },
+  'DA': { name: 'الدمام',          lat: 26.4207, lng: 50.0888 },
+  'DM': { name: 'الدمام',          lat: 26.4207, lng: 50.0888 },
+  'KH': { name: 'الخبر',           lat: 26.2172, lng: 50.1971 },
+  'DH': { name: 'الظهران',         lat: 26.3028, lng: 50.1522 },
+  'AB': { name: 'أبها',            lat: 18.2164, lng: 42.5053 },
+  'KM': { name: 'خميس مشيط',       lat: 18.3059, lng: 42.7306 },
+  'JZ': { name: 'جيزان',           lat: 16.8892, lng: 42.5511 },
+  'NA': { name: 'نجران',           lat: 17.4927, lng: 44.1328 },
+  'HA': { name: 'حائل',            lat: 27.5219, lng: 41.6911 },
+  'HY': { name: 'حائل',            lat: 27.5219, lng: 41.6911 },
+  'TB': { name: 'تبوك',            lat: 28.3838, lng: 36.5550 },
+  'BA': { name: 'الباحة',          lat: 20.0129, lng: 41.4677 },
+  'SK': { name: 'سكاكا',           lat: 29.9697, lng: 40.2064 },
+  'BU': { name: 'بريدة',           lat: 26.3292, lng: 43.9750 },
+  'QS': { name: 'القصيم',          lat: 26.3292, lng: 43.9750 },
+  'YN': { name: 'ينبع',            lat: 24.0895, lng: 38.0618 },
+  'BI': { name: 'بيشة',            lat: 19.9975, lng: 42.6049 },
+  'KF': { name: 'حفر الباطن',      lat: 28.4347, lng: 45.9647 },
+  'UQ': { name: 'عرعر',            lat: 30.9753, lng: 41.0381 },
+  'QL': { name: 'القريات',         lat: 31.3325, lng: 37.3444 },
+  'RB': { name: 'رابغ',            lat: 22.7996, lng: 38.9971 },
+  'WJ': { name: 'الوجه',           lat: 26.5833, lng: 36.4500 },
+  'ZL': { name: 'الزلفي',          lat: 26.2966, lng: 44.8143 },
+};
+
+// استخراج مدينة من رمز العنوان الوطني (TAPA7401 → الطائف + إحداثياتها)
+function getCityFromNationalAddress(code) {
+  const prefix = code.substring(0, 2).toUpperCase();
+  return SAUDI_CITY_CODES[prefix] || null;
+}
+
+// عكس الإحداثيات → اسم المدينة والحي (لمشاركة الموقع من واتساب)
+async function reverseGeocode(lat, lng) {
+  if (!CONFIG.googleMapsKey) return null;
+  try {
+    const { data } = await axios.get('https://maps.googleapis.com/maps/api/geocode/json', {
+      params: { latlng: `${lat},${lng}`, key: CONFIG.googleMapsKey, language: 'ar' },
+    });
+    const result = data.results?.[0];
+    if (!result) return null;
+    let city = null, neighborhood = null;
+    for (const comp of result.address_components) {
+      if (!city && (comp.types.includes('locality') || comp.types.includes('administrative_area_level_2'))) {
+        city = comp.long_name;
+      }
+      if (!neighborhood && (comp.types.includes('sublocality_level_1') || comp.types.includes('neighborhood'))) {
+        neighborhood = comp.long_name;
+      }
+    }
+    if (!city) {
+      const admin = result.address_components.find(c => c.types.includes('administrative_area_level_1'));
+      city = admin?.long_name || null;
+    }
+    return { city, neighborhood };
+  } catch (err) {
+    console.error('❌ Reverse geocode error:', err.message);
+    return null;
+  }
+}
+
 async function sendMessage(to, text) {
   try {
     await axios.post(WA_URL(), {
@@ -791,13 +897,25 @@ async function handleMessage(phone, userMessage) {
       }
       await saveOrderDraft(phone, {
         phone,
-        step:  'collecting_gender',
+        step:  'collecting_name',
         items: [{ id: product.id, name: product.name, price: product.price, quantity }],
       });
       const intro = botReply.replace(/\[START_ORDER:[^\]]+\]/, '').trim();
       if (intro) await sendMessage(phone, intro);
-      await sendMessage(phone, `✅ *${product.name} × ${quantity}* — ${product.price * quantity} ﷼\n\nلإتمام الطلب نحتاج بعض المعلومات 📋\n\n👤 الجنس:\n1️⃣ ذكر\n2️⃣ أنثى`);
+      await sendMessage(phone, `✅ *${product.name} × ${quantity}* — ${product.price * quantity} ﷼\n\nلإتمام الطلب نحتاج معلومتين فقط 📋\n\n✍️ اكتب اسمك الأول والعائلة\nمثال: محمد العمري`);
       await saveMessage(phone, 'bot', `[order_started | ${product.name} × ${quantity}]`, 'order_start');
+      return;
+    }
+
+    // 0b. إرسال رابط المتجر للطلب الذاتي
+    if (botReply.includes('[STORE_ORDER]')) {
+      try {
+        await sendTemplate(phone, 'store_link', []);
+        await saveMessage(phone, 'bot', '[store_link | self_order]', 'store_order');
+      } catch {
+        await sendMessage(phone, '🛒 أكمل طلبك من هنا:\n*ayedhoney.com*');
+        await saveMessage(phone, 'bot', '[store_link fallback]', 'store_order');
+      }
       return;
     }
 
@@ -1059,11 +1177,22 @@ app.post('/webhook', webhookLimiter, async (req, res) => {
       processedMsgIds.add(msg.id);
       setTimeout(() => processedMsgIds.delete(msg.id), 10 * 60 * 1000);
 
+      await saveCustomer(msg.from);
+
       // رسالة موقع WhatsApp
       if (msg.type === 'location') {
         const { latitude, longitude } = msg.location;
         console.log(`📍 ${msg.from}: location ${latitude},${longitude}`);
-        await saveCustomer(msg.from);
+
+        // إذا كان في مسار الطلب (خطوة العنوان) → وجّه للطلب
+        const locDraft = await getOrderDraft(msg.from);
+        if (locDraft?.step === 'collecting_address') {
+          await saveMessage(msg.from, 'user', `[location:${latitude},${longitude}]`);
+          await handleOrderFlow(msg.from, `__LOCATION__:${latitude},${longitude}`, locDraft);
+          continue;
+        }
+
+        // خارج مسار الطلب → رد معلومات توصيل عادي
         const info = await getDeliveryInfo(latitude, longitude);
         const reply = info
           ? (info.sameDay
@@ -1075,14 +1204,23 @@ app.post('/webhook', webhookLimiter, async (req, res) => {
         continue;
       }
 
-      // رسالة نصية — كشف رابط خرائط أبل
+      // رسالة نصية
       const text = msg.text.body;
+
+      // كشف رابط خرائط أبل
       const appleMapsMatch = text.match(/maps\.apple\.com\/?\?.*ll=([-\d.]+),([-\d.]+)/);
       if (appleMapsMatch) {
         const lat = parseFloat(appleMapsMatch[1]);
         const lng = parseFloat(appleMapsMatch[2]);
         console.log(`📍 ${msg.from}: Apple Maps ${lat},${lng}`);
-        await saveCustomer(msg.from);
+
+        const apDraft = await getOrderDraft(msg.from);
+        if (apDraft?.step === 'collecting_address') {
+          await saveMessage(msg.from, 'user', `[apple-maps:${lat},${lng}]`);
+          await handleOrderFlow(msg.from, `__LOCATION__:${lat},${lng}`, apDraft);
+          continue;
+        }
+
         const info = await getDeliveryInfo(lat, lng);
         const reply = info
           ? (info.sameDay
@@ -1094,18 +1232,26 @@ app.post('/webhook', webhookLimiter, async (req, res) => {
         continue;
       }
 
-      // كشف العنوان الوطني السعودي المختصر — مثال: RYDA1234 أو JDAH5678
+      // كشف العنوان الوطني السعودي المختصر — مثال: RYDA1234
       const nationalAddressMatch = text.match(/\b([A-Z]{4}\d{4})\b/i);
       if (nationalAddressMatch) {
         const shortAddress = nationalAddressMatch[1].toUpperCase();
         console.log(`🏠 ${msg.from}: National Address ${shortAddress}`);
-        await saveCustomer(msg.from);
-        const coords = await geocodeCity(`${shortAddress}, Saudi Arabia`);
-        const info   = coords ? await getDeliveryInfo(coords.lat, coords.lng) : null;
-        const reply  = info
+
+        // إذا كان في مسار الطلب → وجّه للطلب (بدل رد المسافة)
+        const naDraft = await getOrderDraft(msg.from);
+        if (naDraft?.step === 'collecting_address' || naDraft?.step === 'collecting_national_address') {
+          await handleMessage(msg.from, text);
+          continue;
+        }
+
+        // خارج مسار الطلب → رد بمعلومات التوصيل من جدول المدن
+        const cityData = getCityFromNationalAddress(shortAddress);
+        const info     = cityData ? await getDeliveryInfo(cityData.lat, cityData.lng) : null;
+        const reply    = info
           ? (info.sameDay
-              ? `🏠 عنوانك الوطني *${shortAddress}*\n📍 على بُعد *${info.km} كم* منا ✅\nالتوصيل بمندوب آل عايد — عادةً *نفس اليوم* 🏎️`
-              : `🏠 عنوانك الوطني *${shortAddress}*\n📍 على بُعد *${info.km} كم* منا\n🚚 التوصيل عبر *SMSA* خلال 2-3 أيام عمل بإذن الله`)
+              ? `🏠 عنوانك الوطني *${shortAddress}* — *${cityData.name}* ✅\nالتوصيل بمندوب آل عايد — عادةً *نفس اليوم* 🏎️`
+              : `🏠 عنوانك الوطني *${shortAddress}* — *${cityData?.name || ''}*\n🚚 التوصيل عبر *SMSA* خلال 2-3 أيام عمل بإذن الله`)
           : `🏠 وصلني عنوانك *${shortAddress}* 🐝\nنوصّل لجميع مناطق المملكة — الطائف نفس اليوم، وباقي المناطق 2-5 أيام 🚚`;
         await sendMessage(msg.from, reply);
         await saveMessage(msg.from, 'bot', reply, 'national_address_reply');

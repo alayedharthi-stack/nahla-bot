@@ -47,7 +47,7 @@ CREATE TABLE salla_tokens (
 -- مسودات الطلبات — طلب كل عميل قيد الإنشاء
 CREATE TABLE order_drafts (
   phone        VARCHAR(20) PRIMARY KEY,
-  step         VARCHAR(30) NOT NULL DEFAULT 'collecting_gender',
+  step         VARCHAR(30) NOT NULL DEFAULT 'collecting_name',
   items        JSONB       DEFAULT '[]',
   gender       VARCHAR(10),
   first_name   VARCHAR(50),
