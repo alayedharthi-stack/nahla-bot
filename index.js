@@ -822,30 +822,25 @@ async function downloadWhatsAppMedia(mediaId) {
   return { buffer: Buffer.from(buffer), mimeType: meta.mime_type };
 }
 
-// رفع ملف الصوت إلى Supabase Storage عبر REST مباشرة
-async function uploadAudioToStorage(buffer, mimeType, phone) {
+// تحويل الصوت إلى base64 data URI للحفظ في قاعدة البيانات
+function audioToDataUri(buffer, mimeType) {
   try {
-    const ext = mimeType.includes('ogg') ? 'ogg'
-      : mimeType.includes('mp4') ? 'mp4'
-      : mimeType.includes('mpeg') ? 'mp3'
-      : 'ogg';
-    const fileName = `${phone}_${Date.now()}.${ext}`;
-    console.log(`🎙️ Uploading ${fileName} (${buffer.length} bytes)`);
-    const { error } = await supabase.storage
-      .from('voice-messages')
-      .upload(fileName, buffer, { contentType: mimeType, upsert: false });
-    if (error) { console.error('❌ Storage error:', JSON.stringify(error)); return null; }
-    const { data: urlData } = supabase.storage.from('voice-messages').getPublicUrl(fileName);
-    console.log('✅ Uploaded:', urlData?.publicUrl);
-    return urlData?.publicUrl || null;
+    // نتجاهل ملفات أكبر من 70KB لتجنب تجاوز حد API
+    if (buffer.length > 70000) {
+      console.log(`🎙️ Audio too large (${buffer.length} bytes) — skipping`);
+      return null;
+    }
+    const base64 = buffer.toString('base64');
+    console.log(`🎙️ Audio → base64 (${buffer.length} bytes)`);
+    return `data:${mimeType};base64,${base64}`;
   } catch (err) {
-    console.error('❌ uploadAudioToStorage:', err.response?.data || err.message);
+    console.error('❌ audioToDataUri:', err.message);
     return null;
   }
 }
 
-// تفريغ الصوت → نص عبر Groq Whisper + رفع إلى Storage
-async function transcribeAudio(mediaId, phone) {
+// تفريغ الصوت → نص عبر Groq Whisper + base64 للداشبورد
+async function transcribeAudio(mediaId) {
   if (!CONFIG.groqKey) throw new Error('GROQ_API_KEY غير مضبوط');
   const { buffer, mimeType } = await downloadWhatsAppMedia(mediaId);
 
@@ -855,9 +850,6 @@ async function transcribeAudio(mediaId, phone) {
     : mimeType.includes('mpeg') ? 'mp3'
     : 'ogg';
 
-  // رفع الملف للتخزين (بالتوازي مع التفريغ)
-  const uploadPromise = phone ? uploadAudioToStorage(buffer, mimeType, phone) : Promise.resolve(null);
-
   const FormData = require('form-data');
   const form = new FormData();
   form.append('file', buffer, { filename: `audio.${ext}`, contentType: mimeType });
@@ -865,15 +857,13 @@ async function transcribeAudio(mediaId, phone) {
   form.append('language', 'ar');
   form.append('response_format', 'text');
 
-  const [{ data }, audioUrl] = await Promise.all([
-    axios.post(
-      'https://api.groq.com/openai/v1/audio/transcriptions',
-      form,
-      { headers: { Authorization: `Bearer ${CONFIG.groqKey}`, ...form.getHeaders() } }
-    ),
-    uploadPromise,
-  ]);
+  const { data } = await axios.post(
+    'https://api.groq.com/openai/v1/audio/transcriptions',
+    form,
+    { headers: { Authorization: `Bearer ${CONFIG.groqKey}`, ...form.getHeaders() } }
+  );
   const transcript = typeof data === 'string' ? data.trim() : data?.text?.trim() || '';
+  const audioUrl = audioToDataUri(buffer, mimeType);
   return { transcript, audioUrl };
 }
 
@@ -1298,7 +1288,7 @@ app.post('/webhook', webhookLimiter, async (req, res) => {
         if (!mediaId) continue;
         console.log(`🎙️ ${msg.from}: voice message`);
         try {
-          const { transcript, audioUrl } = await transcribeAudio(mediaId, msg.from);
+          const { transcript, audioUrl } = await transcribeAudio(mediaId);
           if (!transcript) {
             await sendMessage(msg.from, '🎙️ ما قدرت أسمع الرسالة بوضوح، ممكن تكتب سؤالك؟ 🐝');
             continue;
