@@ -830,16 +830,14 @@ async function uploadAudioToStorage(buffer, mimeType, phone) {
       : mimeType.includes('mpeg') ? 'mp3'
       : 'ogg';
     const fileName = `${phone}_${Date.now()}.${ext}`;
-    const key = CONFIG.supabaseKey;
     console.log(`🎙️ Uploading ${fileName} (${buffer.length} bytes)`);
-    await axios.post(
-      `${CONFIG.supabaseUrl}/storage/v1/object/voice-messages/${fileName}`,
-      buffer,
-      { headers: { Authorization: `Bearer ${key}`, 'Content-Type': mimeType } }
-    );
-    const publicUrl = `${CONFIG.supabaseUrl}/storage/v1/object/public/voice-messages/${fileName}`;
-    console.log('✅ Uploaded:', publicUrl);
-    return publicUrl;
+    const { error } = await supabase.storage
+      .from('voice-messages')
+      .upload(fileName, buffer, { contentType: mimeType, upsert: false });
+    if (error) { console.error('❌ Storage error:', JSON.stringify(error)); return null; }
+    const { data: urlData } = supabase.storage.from('voice-messages').getPublicUrl(fileName);
+    console.log('✅ Uploaded:', urlData?.publicUrl);
+    return urlData?.publicUrl || null;
   } catch (err) {
     console.error('❌ uploadAudioToStorage:', err.response?.data || err.message);
     return null;
