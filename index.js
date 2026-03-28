@@ -993,10 +993,21 @@ async function handleMessage(phone, userMessage) {
         intent = templateName;
         await saveMessage(phone, 'bot', `[template:${templateName}${couponCode ? ` | coupon:${couponCode}` : ''}]`, intent);
       } catch (err) {
-        // فشل القالب — نحلة ترد بنص ذكي بدلاً منه
-        console.error(`❌ Template ${templateName} failed, using AI fallback:`, err.response?.data || err.message);
-        const fallbackReply = botReply.replace(/\[TEMPLATE:[^\]]+\]/, '').trim()
-          || await askAI([...messages, { role: 'assistant', content: `أردت إرسال قالب ${templateName} لكنه فشل، أجيبي بنص طبيعي يحقق نفس الهدف.` }]);
+        console.error(`❌ Template ${templateName} failed:`, err.response?.data || err.message);
+        // نصوص fallback جاهزة لكل قالب — بدون استدعاء AI ثانٍ
+        const staticFallbacks = {
+          store_link:     '🛒 تفضل رابط المتجر:\n*ayedhoney.com*',
+          contact_owner:  '📞 تواصل مع المالك مباشرة:\n*+966555906901*',
+        };
+        let fallbackReply = staticFallbacks[templateName]
+          || botReply.replace(/\[TEMPLATE:[^\]]+\]/, '').trim();
+        if (!fallbackReply) {
+          try {
+            fallbackReply = await askAI([...messages, { role: 'assistant', content: `أردت إرسال قالب ${templateName} لكنه فشل، أجيبي بنص طبيعي.` }]);
+          } catch {
+            fallbackReply = '🐝 تواصل مع المالك: *+966555906901*';
+          }
+        }
         await sendMessage(phone, fallbackReply);
         await saveMessage(phone, 'bot', fallbackReply, 'template_fallback');
       }
