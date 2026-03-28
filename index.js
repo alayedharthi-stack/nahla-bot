@@ -313,8 +313,10 @@ async function getHistory(phone, limit = 8) {
   return (data || []).reverse().map(m => ({ role: m.role === 'bot' ? 'assistant' : 'user', content: m.message }));
 }
 
-async function saveMessage(phone, role, message, intent = 'ai_reply') {
-  await supabase.from('conversations').insert({ phone, role, message, intent, created_at: new Date() });
+async function saveMessage(phone, role, message, intent = 'ai_reply', mediaUrl = null) {
+  const row = { phone, role, message, intent, created_at: new Date() };
+  if (mediaUrl) row.media_url = mediaUrl;
+  await supabase.from('conversations').insert(row);
 }
 
 async function saveCoupon(phone, code, discount, days = 1) {
@@ -819,8 +821,28 @@ async function downloadWhatsAppMedia(mediaId) {
   return { buffer: Buffer.from(buffer), mimeType: meta.mime_type };
 }
 
-// تفريغ الصوت → نص عبر Groq Whisper
-async function transcribeAudio(mediaId) {
+// رفع ملف الصوت إلى Supabase Storage
+async function uploadAudioToStorage(buffer, mimeType, phone) {
+  try {
+    const ext = mimeType.includes('ogg') ? 'ogg'
+      : mimeType.includes('mp4') ? 'mp4'
+      : mimeType.includes('mpeg') ? 'mp3'
+      : 'ogg';
+    const fileName = `${phone}_${Date.now()}.${ext}`;
+    const { error } = await supabase.storage
+      .from('voice-messages')
+      .upload(fileName, buffer, { contentType: mimeType, upsert: false });
+    if (error) { console.error('❌ Storage upload error:', error.message); return null; }
+    const { data } = supabase.storage.from('voice-messages').getPublicUrl(fileName);
+    return data?.publicUrl || null;
+  } catch (err) {
+    console.error('❌ uploadAudioToStorage:', err.message);
+    return null;
+  }
+}
+
+// تفريغ الصوت → نص عبر Groq Whisper + رفع إلى Storage
+async function transcribeAudio(mediaId, phone) {
   if (!CONFIG.groqKey) throw new Error('GROQ_API_KEY غير مضبوط');
   const { buffer, mimeType } = await downloadWhatsAppMedia(mediaId);
 
@@ -830,6 +852,9 @@ async function transcribeAudio(mediaId) {
     : mimeType.includes('mpeg') ? 'mp3'
     : 'ogg';
 
+  // رفع الملف للتخزين (بالتوازي مع التفريغ)
+  const uploadPromise = phone ? uploadAudioToStorage(buffer, mimeType, phone) : Promise.resolve(null);
+
   const FormData = require('form-data');
   const form = new FormData();
   form.append('file', buffer, { filename: `audio.${ext}`, contentType: mimeType });
@@ -837,12 +862,16 @@ async function transcribeAudio(mediaId) {
   form.append('language', 'ar');
   form.append('response_format', 'text');
 
-  const { data } = await axios.post(
-    'https://api.groq.com/openai/v1/audio/transcriptions',
-    form,
-    { headers: { Authorization: `Bearer ${CONFIG.groqKey}`, ...form.getHeaders() } }
-  );
-  return typeof data === 'string' ? data.trim() : data?.text?.trim() || '';
+  const [{ data }, audioUrl] = await Promise.all([
+    axios.post(
+      'https://api.groq.com/openai/v1/audio/transcriptions',
+      form,
+      { headers: { Authorization: `Bearer ${CONFIG.groqKey}`, ...form.getHeaders() } }
+    ),
+    uploadPromise,
+  ]);
+  const transcript = typeof data === 'string' ? data.trim() : data?.text?.trim() || '';
+  return { transcript, audioUrl };
 }
 
 // قراءة الصورة → نص وصفي عبر Claude Vision
@@ -1266,13 +1295,13 @@ app.post('/webhook', webhookLimiter, async (req, res) => {
         if (!mediaId) continue;
         console.log(`🎙️ ${msg.from}: voice message`);
         try {
-          const transcript = await transcribeAudio(mediaId);
+          const { transcript, audioUrl } = await transcribeAudio(mediaId, msg.from);
           if (!transcript) {
             await sendMessage(msg.from, '🎙️ ما قدرت أسمع الرسالة بوضوح، ممكن تكتب سؤالك؟ 🐝');
             continue;
           }
-          console.log(`🎙️ Transcript: ${transcript}`);
-          await saveMessage(msg.from, 'user', `[voice] ${transcript}`);
+          console.log(`🎙️ Transcript: ${transcript}${audioUrl ? ' | uploaded' : ''}`);
+          await saveMessage(msg.from, 'user', `[voice] ${transcript}`, 'ai_reply', audioUrl);
           await handleMessage(msg.from, transcript);
         } catch (err) {
           console.error('❌ Voice transcription error:', err.message);

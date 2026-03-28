@@ -21,8 +21,12 @@ CREATE TABLE conversations (
   role VARCHAR(10) NOT NULL, -- 'user' or 'bot'
   message TEXT,
   intent VARCHAR(50),
+  media_url TEXT,            -- رابط الصوت في Supabase Storage (للرسائل الصوتية)
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
+
+-- إذا كان الجدول موجوداً مسبقاً شغّل هذا بدلاً من إعادة الإنشاء:
+-- ALTER TABLE conversations ADD COLUMN IF NOT EXISTS media_url TEXT;
 
 CREATE TABLE coupons (
   id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
