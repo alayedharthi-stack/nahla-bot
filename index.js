@@ -37,6 +37,7 @@ const CONFIG = {
   // Supabase
   supabaseUrl: process.env.SUPABASE_URL,
   supabaseKey: process.env.SUPABASE_ANON_KEY,
+  supabaseServiceKey: process.env.SUPABASE_SERVICE_KEY, // للرفع إلى Storage
 
   // Auth للـ API الداخلي
   apiSecret:   process.env.API_SECRET,
@@ -64,7 +65,8 @@ if (!CONFIG.waVerify) {
 // ====================================================
 // 🔗 الاتصالات
 // ====================================================
-const supabase = createClient(CONFIG.supabaseUrl, CONFIG.supabaseKey);
+const supabase        = createClient(CONFIG.supabaseUrl, CONFIG.supabaseKey);
+const supabaseStorage = createClient(CONFIG.supabaseUrl, CONFIG.supabaseServiceKey || CONFIG.supabaseKey);
 const genAI    = new GoogleGenerativeAI(CONFIG.geminiKey);
 const gemini   = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
 
@@ -829,11 +831,11 @@ async function uploadAudioToStorage(buffer, mimeType, phone) {
       : mimeType.includes('mpeg') ? 'mp3'
       : 'ogg';
     const fileName = `${phone}_${Date.now()}.${ext}`;
-    const { error } = await supabase.storage
+    const { error } = await supabaseStorage.storage
       .from('voice-messages')
       .upload(fileName, buffer, { contentType: mimeType, upsert: false });
     if (error) { console.error('❌ Storage upload error:', error.message); return null; }
-    const { data } = supabase.storage.from('voice-messages').getPublicUrl(fileName);
+    const { data } = supabaseStorage.storage.from('voice-messages').getPublicUrl(fileName);
     return data?.publicUrl || null;
   } catch (err) {
     console.error('❌ uploadAudioToStorage:', err.message);
