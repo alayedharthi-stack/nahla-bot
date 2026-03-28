@@ -830,7 +830,7 @@ async function uploadAudioToStorage(buffer, mimeType, phone) {
       : mimeType.includes('mpeg') ? 'mp3'
       : 'ogg';
     const fileName = `${phone}_${Date.now()}.${ext}`;
-    const key = CONFIG.supabaseServiceKey || CONFIG.supabaseKey;
+    const key = CONFIG.supabaseKey;
     console.log(`🎙️ Uploading ${fileName} (${buffer.length} bytes)`);
     await axios.post(
       `${CONFIG.supabaseUrl}/storage/v1/object/voice-messages/${fileName}`,
