@@ -401,27 +401,39 @@ async function clearOrderDraft(phone) {
 }
 
 async function createSallaOrder(draft) {
-  const token = await getSallaToken();
+  const token    = await getSallaToken();
   const fullName = `${draft.first_name} ${draft.last_name}`;
-  const shippingCompany = draft.delivery_method === 'smsa' ? 'smsa'
-    : draft.delivery_method === 'dhl' ? 'dhl' : null; // mando3ob/pickup = null (يدوي)
+
+  // تنسيق الجوال: mobile_code منفصل عن الرقم
+  const mobileCode = '966';
+  const mobile     = draft.phone.replace(/^966/, '');
+
+  // شركة الشحن
+  const shippingCompany = { smsa: 'smsa', dhl: 'dhl' }[draft.delivery_method] || null;
 
   const body = {
     source: 'whatsapp',
     customer: {
-      first_name: draft.first_name,
-      last_name:  draft.last_name,
-      mobile:     draft.phone,
-      gender:     draft.gender,
+      first_name:  draft.first_name,
+      last_name:   draft.last_name,
+      mobile:      mobile,
+      mobile_code: `+${mobileCode}`,
+      gender:      draft.gender, // 'male' | 'female'
+    },
+    shipping: {
+      free_shipping: true,
+      ...(shippingCompany && { company: shippingCompany }),
+      pickup: draft.delivery_method === 'pickup',
     },
     shipping_address: {
       name:          fullName,
       country:       'SA',
-      city:          draft.city || 'الطائف',
+      city:          draft.city       || 'الطائف',
+      block:         draft.neighborhood || '',
+      street:        draft.street     || '',
       short_address: draft.national_address || '',
     },
     items: draft.items,
-    ...(shippingCompany && { shipping: { company: shippingCompany } }),
   };
 
   const { data } = await axios.post(
@@ -473,29 +485,49 @@ async function handleOrderFlow(phone, userMessage, draft) {
     return;
   }
 
-  // ── الخطوة 3: العنوان ──
+  // ── الخطوة 3: العنوان (مدينة أو عنوان وطني) ──
   if (step === 'collecting_address') {
-    const nationalMatch = msg.match(/\b([A-Z]{4}\d{4})\b/i);
+    const nationalMatch    = msg.match(/\b([A-Z]{4}\d{4})\b/i);
     const national_address = nationalMatch ? nationalMatch[1].toUpperCase() : null;
-    const city = national_address ? null : msg;
+    const city             = national_address ? null : msg;
 
     await saveOrderDraft(phone, { national_address, city: city || draft.city });
 
     const coords = await geocodeCity(national_address || city);
     const info   = coords ? await getDeliveryInfo(coords.lat, coords.lng) : null;
     const isTaif = info?.sameDay || false;
-
     await saveOrderDraft(phone, { is_taif: isTaif, city: city || draft.city || 'الطائف' });
 
+    // إذا لم يرسل عنوان وطني → نطلب الحي لإكمال بيانات الشحن
+    if (!national_address) {
+      await saveOrderDraft(phone, { step: 'collecting_neighborhood' });
+      await sendMessage(phone, `📍 شكراً! اكتب اسم الحي\nمثال: حي السلامة`);
+      return;
+    }
+
+    // عنوان وطني → ننتقل مباشرة لاختيار التوصيل
     if (isTaif) {
       await saveOrderDraft(phone, { step: 'selecting_delivery' });
-      await sendMessage(phone,
-        `📍 عنوانك داخل نطاق الطائف ✅\n\nاختر طريقة الاستلام:\n1️⃣ مندوب آل عايد — يوصّلك للباب 🏎️\n2️⃣ استلام من الفرع بنفسك 📍`
-      );
+      await sendMessage(phone, `📍 عنوانك داخل نطاق الطائف ✅\n\nاختر طريقة الاستلام:\n1️⃣ مندوب آل عايد — يوصّلك للباب 🏎️\n2️⃣ استلام من الفرع بنفسك 📍`);
     } else {
       const method = (info && info.km > 2000) ? 'dhl' : 'smsa';
       await saveOrderDraft(phone, { delivery_method: method, step: 'confirming' });
       await sendSummary(phone, { ...draft, national_address, city: city || draft.city, delivery_method: method });
+    }
+    return;
+  }
+
+  // ── الخطوة 3b: الحي (إذا لم يكن عنده عنوان وطني) ──
+  if (step === 'collecting_neighborhood') {
+    await saveOrderDraft(phone, { neighborhood: msg, step: draft.is_taif ? 'selecting_delivery' : 'confirming' });
+    const updatedDraft = { ...draft, neighborhood: msg };
+
+    if (draft.is_taif) {
+      await sendMessage(phone, `📍 عنوانك داخل نطاق الطائف ✅\n\nاختر طريقة الاستلام:\n1️⃣ مندوب آل عايد — يوصّلك للباب 🏎️\n2️⃣ استلام من الفرع بنفسك 📍`);
+    } else {
+      const method = (draft.city && draft.city.includes('دول')) ? 'dhl' : 'smsa';
+      await saveOrderDraft(phone, { delivery_method: method });
+      await sendSummary(phone, { ...updatedDraft, delivery_method: method });
     }
     return;
   }

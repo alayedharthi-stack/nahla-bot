@@ -54,6 +54,8 @@ CREATE TABLE order_drafts (
   last_name    VARCHAR(50),
   city         VARCHAR(50),
   national_address VARCHAR(10),
+  neighborhood     VARCHAR(50),
+  street           VARCHAR(50),
   delivery_method  VARCHAR(20), -- 'mando3ob' | 'pickup' | 'smsa' | 'dhl'
   is_taif      BOOLEAN     DEFAULT FALSE,
   created_at   TIMESTAMPTZ DEFAULT NOW(),
