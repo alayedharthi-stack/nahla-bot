@@ -317,7 +317,8 @@ async function getHistory(phone, limit = 8) {
 async function saveMessage(phone, role, message, intent = 'ai_reply', mediaUrl = null) {
   const row = { phone, role, message, intent, created_at: new Date() };
   if (mediaUrl) row.media_url = mediaUrl;
-  await supabase.from('conversations').insert(row);
+  const { error } = await supabase.from('conversations').insert(row);
+  if (error) console.error('❌ saveMessage error:', JSON.stringify(error));
 }
 
 async function saveCoupon(phone, code, discount, days = 1) {
