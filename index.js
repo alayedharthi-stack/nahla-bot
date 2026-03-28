@@ -44,6 +44,9 @@ const CONFIG = {
   // Google Maps
   googleMapsKey: process.env.GOOGLE_MAPS_API_KEY,
 
+  // Groq — تفريغ الصوت (Whisper)
+  groqKey: process.env.GROQ_API_KEY,
+
   // سلة — OAuth2
   sallaClientId:     process.env.SALLA_CLIENT_ID,
   sallaClientSecret: process.env.SALLA_CLIENT_SECRET,
@@ -797,6 +800,85 @@ async function reverseGeocode(lat, lng) {
   }
 }
 
+// ====================================================
+// 🎙️ الصوت والصور — Groq Whisper + Claude Vision
+// ====================================================
+
+// تحميل ملف الميديا من WhatsApp
+async function downloadWhatsAppMedia(mediaId) {
+  // الخطوة 1: احصل على URL الملف
+  const { data: meta } = await axios.get(
+    `https://graph.facebook.com/v19.0/${mediaId}`,
+    { headers: { Authorization: `Bearer ${CONFIG.waToken}` } }
+  );
+  // الخطوة 2: حمّل الملف كـ buffer
+  const { data: buffer } = await axios.get(meta.url, {
+    headers: { Authorization: `Bearer ${CONFIG.waToken}` },
+    responseType: 'arraybuffer',
+  });
+  return { buffer: Buffer.from(buffer), mimeType: meta.mime_type };
+}
+
+// تفريغ الصوت → نص عبر Groq Whisper
+async function transcribeAudio(mediaId) {
+  if (!CONFIG.groqKey) throw new Error('GROQ_API_KEY غير مضبوط');
+  const { buffer, mimeType } = await downloadWhatsAppMedia(mediaId);
+
+  // نحدد الامتداد من mime type
+  const ext = mimeType.includes('ogg') ? 'ogg'
+    : mimeType.includes('mp4') ? 'mp4'
+    : mimeType.includes('mpeg') ? 'mp3'
+    : 'ogg';
+
+  const FormData = require('form-data');
+  const form = new FormData();
+  form.append('file', buffer, { filename: `audio.${ext}`, contentType: mimeType });
+  form.append('model', 'whisper-large-v3');
+  form.append('language', 'ar');
+  form.append('response_format', 'text');
+
+  const { data } = await axios.post(
+    'https://api.groq.com/openai/v1/audio/transcriptions',
+    form,
+    { headers: { Authorization: `Bearer ${CONFIG.groqKey}`, ...form.getHeaders() } }
+  );
+  return typeof data === 'string' ? data.trim() : data?.text?.trim() || '';
+}
+
+// قراءة الصورة → نص وصفي عبر Claude Vision
+async function describeImage(mediaId, caption) {
+  const { buffer, mimeType } = await downloadWhatsAppMedia(mediaId);
+  const base64 = buffer.toString('base64');
+
+  const prompt = caption
+    ? `العميل أرسل صورة مع تعليق: "${caption}"\n\nصِف ما تراه في الصورة باختصار ثم أجب على تعليق العميل كمستشارة مبيعات عسل.`
+    : `العميل أرسل هذه الصورة. صِف ما تراه وأجب عليه كمستشارة مبيعات عسل بلدي.`;
+
+  const { data } = await axios.post(
+    'https://api.anthropic.com/v1/messages',
+    {
+      model: 'claude-sonnet-4-6',
+      max_tokens: 500,
+      system: SYSTEM_PROMPT,
+      messages: [{
+        role: 'user',
+        content: [
+          { type: 'image', source: { type: 'base64', media_type: mimeType, data: base64 } },
+          { type: 'text', text: prompt },
+        ],
+      }],
+    },
+    {
+      headers: {
+        'x-api-key': CONFIG.claudeKey,
+        'anthropic-version': '2023-06-01',
+        'Content-Type': 'application/json',
+      },
+    }
+  );
+  return data.content[0].text;
+}
+
 async function sendMessage(to, text) {
   try {
     await axios.post(WA_URL(), {
@@ -1131,7 +1213,7 @@ app.post('/webhook', webhookLimiter, async (req, res) => {
     if (!messages?.length) return;
     for (const msg of messages) {
       // تجاهل الأنواع غير المدعومة
-      if (!['text', 'location'].includes(msg.type)) continue;
+      if (!['text', 'location', 'audio', 'image'].includes(msg.type)) continue;
 
       // تجاهل الرسائل المكررة
       if (processedMsgIds.has(msg.id)) {
@@ -1164,6 +1246,45 @@ app.post('/webhook', webhookLimiter, async (req, res) => {
           : `📍 وصلني موقعك! 🐝\nنوصّل لجميع مناطق المملكة — الطائف نفس اليوم، وباقي المناطق 2-5 أيام 🚚`;
         await sendMessage(msg.from, reply);
         await saveMessage(msg.from, 'bot', reply, 'location_reply');
+        continue;
+      }
+
+      // 🎙️ رسالة صوتية — Groq Whisper
+      if (msg.type === 'audio') {
+        const mediaId = msg.audio?.id;
+        if (!mediaId) continue;
+        console.log(`🎙️ ${msg.from}: voice message`);
+        try {
+          const transcript = await transcribeAudio(mediaId);
+          if (!transcript) {
+            await sendMessage(msg.from, '🎙️ ما قدرت أسمع الرسالة بوضوح، ممكن تكتب سؤالك؟ 🐝');
+            continue;
+          }
+          console.log(`🎙️ Transcript: ${transcript}`);
+          await saveMessage(msg.from, 'user', `[voice] ${transcript}`);
+          await handleMessage(msg.from, transcript);
+        } catch (err) {
+          console.error('❌ Voice transcription error:', err.message);
+          await sendMessage(msg.from, '🎙️ صعوبة في معالجة الصوت — ممكن تكتب سؤالك؟ 🐝');
+        }
+        continue;
+      }
+
+      // 🖼️ رسالة صورة — Claude Vision
+      if (msg.type === 'image') {
+        const mediaId = msg.image?.id;
+        const caption = msg.image?.caption || '';
+        if (!mediaId) continue;
+        console.log(`🖼️ ${msg.from}: image${caption ? ` + caption: ${caption}` : ''}`);
+        try {
+          const reply = await describeImage(mediaId, caption);
+          await saveMessage(msg.from, 'user', `[image]${caption ? ` ${caption}` : ''}`);
+          await sendMessage(msg.from, reply);
+          await saveMessage(msg.from, 'bot', reply, 'image_reply');
+        } catch (err) {
+          console.error('❌ Image description error:', err.message);
+          await sendMessage(msg.from, '🖼️ ما قدرت أقرأ الصورة، ممكن تصف ما تريد بالكلام؟ 🐝');
+        }
         continue;
       }
 
