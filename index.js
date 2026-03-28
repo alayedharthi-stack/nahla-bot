@@ -1171,7 +1171,7 @@ app.post('/webhook', webhookLimiter, async (req, res) => {
       const text = msg.text.body;
 
       // كشف رابط خرائط أبل
-      const appleMapsMatch = text.match(/maps\.apple\.com\/?\?.*ll=([-\d.]+),([-\d.]+)/);
+      const appleMapsMatch = text.match(/maps\.apple\.com[^?]*\?[^#]*ll=([-\d.]+),([-\d.]+)/);
       if (appleMapsMatch) {
         const lat = parseFloat(appleMapsMatch[1]);
         const lng = parseFloat(appleMapsMatch[2]);
