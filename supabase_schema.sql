@@ -44,6 +44,22 @@ CREATE TABLE salla_tokens (
   CONSTRAINT one_row CHECK (id = 1)
 );
 
+-- مسودات الطلبات — طلب كل عميل قيد الإنشاء
+CREATE TABLE order_drafts (
+  phone        VARCHAR(20) PRIMARY KEY,
+  step         VARCHAR(30) NOT NULL DEFAULT 'collecting_gender',
+  items        JSONB       DEFAULT '[]',
+  gender       VARCHAR(10),
+  first_name   VARCHAR(50),
+  last_name    VARCHAR(50),
+  city         VARCHAR(50),
+  national_address VARCHAR(10),
+  delivery_method  VARCHAR(20), -- 'mando3ob' | 'pickup' | 'smsa' | 'dhl'
+  is_taif      BOOLEAN     DEFAULT FALSE,
+  created_at   TIMESTAMPTZ DEFAULT NOW(),
+  updated_at   TIMESTAMPTZ DEFAULT NOW()
+);
+
 -- فهارس للسرعة
 CREATE INDEX ON conversations(phone);
 CREATE INDEX ON conversations(created_at DESC);

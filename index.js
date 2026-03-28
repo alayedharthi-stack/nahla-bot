@@ -128,7 +128,15 @@ ${knowledge}
 
 ## ⚡ قدراتك — أنتِ تقررين متى وكيف:
 
-### 1️⃣ إرسال كوبون خصم
+### 1️⃣ إنشاء طلب مباشر من واتساب
+- إذا حدد العميل منتجاً وأراد الشراء الفعلي:
+  → استخدمي [START_ORDER:اسم_المنتج:الكمية]
+  → أمثلة: [START_ORDER:سمر الحجاز 1:1] أو [START_ORDER:سدر 500:2]
+- المنتجات المتاحة للطلب: سمر الحجاز (250/500/1كيلو) | طلح نجد (250/500/1كيلو) | سدر (250/500/1كيلو) | ضهيان (250/500/1كيلو) | سمن بقر (300جم/1كيلو) | سمن غنم
+- الكود: [START_ORDER:المنتج:الكمية] — يبدأ تلقائياً خطوات جمع معلومات العميل
+- يمكن إضافة نص قبل الأمر: "ممتاز، سأجهز طلبك الآن [START_ORDER:سمر الحجاز 1:1]"
+
+### 2️⃣ إرسال كوبون خصم
 - متى: عند التردد في الشراء، طلب الخصم، أو الحاجة لتحفيز
 - الكوبون الترحيبي للعميل الجديد: 5% دائماً [COUPON:5]
 - نسب الخصم العامة: 5% أو 7% أو 9% (أنتِ تقررين المناسب حسب الموقف)
@@ -319,6 +327,28 @@ async function saveCoupon(phone, code, discount, days = 1) {
 }
 
 // ====================================================
+// 🛍️ خريطة منتجات سلة — اسم المنتج → معرّف سلة
+// عدّل المعرّفات من لوحة تحكم سلة → المنتجات
+// ====================================================
+const SALLA_PRODUCTS = {
+  'سمر الحجاز 250':  { id: 'PRODUCT_ID_1', name: 'سمر الحجاز البلدي 250جم',  price: 126 },
+  'سمر الحجاز 500':  { id: 'PRODUCT_ID_2', name: 'سمر الحجاز البلدي 500جم',  price: 193 },
+  'سمر الحجاز 1':    { id: 'PRODUCT_ID_3', name: 'سمر الحجاز البلدي 1كيلو',   price: 387 },
+  'طلح نجد 250':     { id: 'PRODUCT_ID_4', name: 'طلح نجد البلدي 250جم',       price: 126 },
+  'طلح نجد 500':     { id: 'PRODUCT_ID_5', name: 'طلح نجد البلدي 500جم',       price: 193 },
+  'طلح نجد 1':       { id: 'PRODUCT_ID_6', name: 'طلح نجد البلدي 1كيلو',        price: 387 },
+  'سدر 250':         { id: 'PRODUCT_ID_7', name: 'سدر بلدي 250جم',              price: 126 },
+  'سدر 500':         { id: 'PRODUCT_ID_8', name: 'سدر بلدي 500جم',              price: 193 },
+  'سدر 1':           { id: 'PRODUCT_ID_9', name: 'سدر بلدي 1كيلو',               price: 387 },
+  'ضهيان 250':       { id: 'PRODUCT_ID_10', name: 'ضهيان جبلي 250جم',           price: 89  },
+  'ضهيان 500':       { id: 'PRODUCT_ID_11', name: 'ضهيان جبلي 500جم',           price: 179 },
+  'ضهيان 1':         { id: 'PRODUCT_ID_12', name: 'ضهيان جبلي 1كيلو',            price: 358 },
+  'سمن بقر 300':     { id: 'PRODUCT_ID_13', name: 'سمن بقر بلدي 300جم',         price: 56  },
+  'سمن بقر 1':       { id: 'PRODUCT_ID_14', name: 'سمن بقر بلدي 1كيلو',          price: 189 },
+  'سمن غنم':         { id: 'PRODUCT_ID_15', name: 'سمن غنم بلدي 300جم',          price: 79  },
+};
+
+// ====================================================
 // 🏪 سلة — إنشاء كوبونات حقيقية في المتجر
 // ====================================================
 
@@ -350,6 +380,181 @@ async function refreshSallaToken(refreshToken) {
   });
   console.log('🔄 Salla token refreshed');
   return access_token;
+}
+
+// ====================================================
+// 🛒 إنشاء الطلب — State Machine
+// ====================================================
+
+async function getOrderDraft(phone) {
+  const { data } = await supabase.from('order_drafts').select('*').eq('phone', phone).maybeSingle();
+  return data;
+}
+async function saveOrderDraft(phone, updates) {
+  await supabase.from('order_drafts').upsert(
+    { phone, updated_at: new Date().toISOString(), ...updates },
+    { onConflict: 'phone' }
+  );
+}
+async function clearOrderDraft(phone) {
+  await supabase.from('order_drafts').delete().eq('phone', phone);
+}
+
+async function createSallaOrder(draft) {
+  const token = await getSallaToken();
+  const fullName = `${draft.first_name} ${draft.last_name}`;
+  const shippingCompany = draft.delivery_method === 'smsa' ? 'smsa'
+    : draft.delivery_method === 'dhl' ? 'dhl' : null; // mando3ob/pickup = null (يدوي)
+
+  const body = {
+    source: 'whatsapp',
+    customer: {
+      first_name: draft.first_name,
+      last_name:  draft.last_name,
+      mobile:     draft.phone,
+      gender:     draft.gender,
+    },
+    shipping_address: {
+      name:          fullName,
+      country:       'SA',
+      city:          draft.city || 'الطائف',
+      short_address: draft.national_address || '',
+    },
+    items: draft.items,
+    ...(shippingCompany && { shipping: { company: shippingCompany } }),
+  };
+
+  const { data } = await axios.post(
+    'https://api.salla.dev/admin/v2/orders',
+    body,
+    { headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' } }
+  );
+  return data?.data;
+}
+
+async function handleOrderFlow(phone, userMessage, draft) {
+  const msg = userMessage.trim();
+
+  // إلغاء في أي وقت
+  if (/^(إلغاء|الغاء|cancel|لا أريد|مو زين)$/i.test(msg)) {
+    await clearOrderDraft(phone);
+    await sendMessage(phone, '✅ تم إلغاء الطلب — كيف أقدر أساعدك؟ 🐝');
+    return;
+  }
+
+  const step = draft.step;
+
+  // ── الخطوة 1: الجنس ──
+  if (step === 'collecting_gender') {
+    const male   = /ذكر|رجل|أخ|^1$/i.test(msg);
+    const female = /أنثى|انثى|امرأة|أخت|^2$/i.test(msg);
+    if (!male && !female) {
+      await sendMessage(phone, '👤 الجنس:\n1️⃣ ذكر\n2️⃣ أنثى');
+      return;
+    }
+    await saveOrderDraft(phone, { gender: male ? 'male' : 'female', step: 'collecting_name' });
+    await sendMessage(phone, '✍️ اكتب اسمك الأول واسم العائلة\nمثال: محمد العمري');
+    return;
+  }
+
+  // ── الخطوة 2: الاسم ──
+  if (step === 'collecting_name') {
+    const parts = msg.split(/\s+/).filter(Boolean);
+    if (parts.length < 2) {
+      await sendMessage(phone, '✍️ يرجى كتابة الاسم الأول والعائلة معاً\nمثال: محمد العمري');
+      return;
+    }
+    await saveOrderDraft(phone, {
+      first_name: parts[0],
+      last_name:  parts.slice(1).join(' '),
+      step: 'collecting_address',
+    });
+    await sendMessage(phone, `شكراً ${parts[0]}! 🐝\n\nأرسل عنوانك الوطني المختصر\nمثال: RYDA1234\n\nأو اكتب اسم مدينتك`);
+    return;
+  }
+
+  // ── الخطوة 3: العنوان ──
+  if (step === 'collecting_address') {
+    const nationalMatch = msg.match(/\b([A-Z]{4}\d{4})\b/i);
+    const national_address = nationalMatch ? nationalMatch[1].toUpperCase() : null;
+    const city = national_address ? null : msg;
+
+    await saveOrderDraft(phone, { national_address, city: city || draft.city });
+
+    const coords = await geocodeCity(national_address || city);
+    const info   = coords ? await getDeliveryInfo(coords.lat, coords.lng) : null;
+    const isTaif = info?.sameDay || false;
+
+    await saveOrderDraft(phone, { is_taif: isTaif, city: city || draft.city || 'الطائف' });
+
+    if (isTaif) {
+      await saveOrderDraft(phone, { step: 'selecting_delivery' });
+      await sendMessage(phone,
+        `📍 عنوانك داخل نطاق الطائف ✅\n\nاختر طريقة الاستلام:\n1️⃣ مندوب آل عايد — يوصّلك للباب 🏎️\n2️⃣ استلام من الفرع بنفسك 📍`
+      );
+    } else {
+      const method = (info && info.km > 2000) ? 'dhl' : 'smsa';
+      await saveOrderDraft(phone, { delivery_method: method, step: 'confirming' });
+      await sendSummary(phone, { ...draft, national_address, city: city || draft.city, delivery_method: method });
+    }
+    return;
+  }
+
+  // ── الخطوة 4: طريقة التوصيل (داخل الطائف فقط) ──
+  if (step === 'selecting_delivery') {
+    const isMando  = /^1$|مندوب|توصيل للباب/i.test(msg);
+    const isPickup = /^2$|استلام|فرع|بنفسي/i.test(msg);
+    if (!isMando && !isPickup) {
+      await sendMessage(phone, '1️⃣ مندوب آل عايد\n2️⃣ استلام من الفرع');
+      return;
+    }
+    const method = isMando ? 'mando3ob' : 'pickup';
+    await saveOrderDraft(phone, { delivery_method: method, step: 'confirming' });
+    await sendSummary(phone, { ...draft, delivery_method: method });
+    return;
+  }
+
+  // ── الخطوة 5: التأكيد ──
+  if (step === 'confirming') {
+    if (!/نعم|yes|أكد|تأكيد|موافق|^ok$/i.test(msg)) {
+      await sendMessage(phone, 'اكتب *نعم* لتأكيد الطلب أو *إلغاء* للإلغاء');
+      return;
+    }
+    try {
+      const order      = await createSallaOrder(draft);
+      const payUrl     = order?.payment_url || order?.urls?.payment;
+      const orderId    = order?.reference_id || order?.id || '—';
+      await clearOrderDraft(phone);
+      const reply = payUrl
+        ? `🎉 تم إنشاء طلبك *#${orderId}* بنجاح!\n\n💳 اضغط لإتمام الدفع:\n${payUrl}\n\n🐝 شكراً لثقتك بآل عايد!`
+        : `✅ تم إنشاء طلبك *#${orderId}*!\nسيتواصل معك فريقنا قريباً 🐝`;
+      await sendMessage(phone, reply);
+      await saveMessage(phone, 'bot', `[order_created | id:${orderId}]`, 'order_created');
+    } catch (err) {
+      console.error('❌ Salla create order:', err.response?.data || err.message);
+      await sendMessage(phone, '🙏 عذراً، حدث خطأ في إنشاء الطلب\nسنتواصل معك مباشرة');
+      await sendMessage(CONFIG.ownerPhone, `⚠️ فشل إنشاء طلب\nالعميل: ${phone}\nالخطأ: ${err.message}`);
+    }
+    return;
+  }
+}
+
+async function sendSummary(phone, draft) {
+  const delivery = {
+    mando3ob: 'مندوب آل عايد 🏎️',
+    pickup:   `استلام من الفرع 📍\n${draft.is_taif ? 'https://maps.app.goo.gl/WstMVjfaSMckzx8N7' : ''}`,
+    smsa:     'SMSA — 2-3 أيام عمل 🚚',
+    dhl:      'DHL — 3-7 أيام عمل 🌍',
+  }[draft.delivery_method] || '—';
+
+  const itemsText = (draft.items || [])
+    .map(i => `• ${i.name} × ${i.quantity} — ${i.price * i.quantity} ﷼`)
+    .join('\n');
+  const total = (draft.items || []).reduce((s, i) => s + i.price * i.quantity, 0);
+
+  await sendMessage(phone,
+    `📋 *ملخص طلبك:*\n\n${itemsText}\n\n💰 الإجمالي: *${total} ﷼*\n🚚 التوصيل: ${delivery}\n📍 العنوان: ${draft.national_address || draft.city || '—'}\n\nاكتب *نعم* لتأكيد أو *إلغاء* للإلغاء`
+  );
 }
 
 async function createSallaCoupon(code, discount, days = 3) {
@@ -519,6 +724,14 @@ async function handleMessage(phone, userMessage) {
     const customer = await getCustomer(phone);
     await saveCustomer(phone);
 
+    // ── تحقق من طلب جارٍ ──
+    const draft = await getOrderDraft(phone);
+    if (draft?.step) {
+      await saveMessage(phone, 'user', userMessage);
+      await handleOrderFlow(phone, userMessage, draft);
+      return;
+    }
+
     // جلب التاريخ أولاً قبل حفظ الرسالة الجديدة — لتجنب تكرارها في السياق
     const history  = await getHistory(phone, 8);
     await saveMessage(phone, 'user', userMessage);
@@ -530,6 +743,31 @@ async function handleMessage(phone, userMessage) {
     let intent   = 'ai_reply';
 
     // ===== معالجة الأوامر التي تقررها نحلة =====
+
+    // 0. بدء طلب جديد
+    const orderMatch = botReply.match(/\[START_ORDER:([^\]:]+):(\d+)\]/);
+    if (orderMatch) {
+      const productKey = orderMatch[1].trim();
+      const quantity   = parseInt(orderMatch[2]);
+      const product    = Object.entries(SALLA_PRODUCTS).find(([k]) =>
+        productKey.includes(k) || k.includes(productKey)
+      )?.[1];
+
+      if (!product) {
+        await sendMessage(phone, botReply.replace(/\[START_ORDER:[^\]]+\]/, '').trim());
+        return;
+      }
+      await saveOrderDraft(phone, {
+        phone,
+        step:  'collecting_gender',
+        items: [{ id: product.id, name: product.name, price: product.price, quantity }],
+      });
+      const intro = botReply.replace(/\[START_ORDER:[^\]]+\]/, '').trim();
+      if (intro) await sendMessage(phone, intro);
+      await sendMessage(phone, `✅ *${product.name} × ${quantity}* — ${product.price * quantity} ﷼\n\nلإتمام الطلب نحتاج بعض المعلومات 📋\n\n👤 الجنس:\n1️⃣ ذكر\n2️⃣ أنثى`);
+      await saveMessage(phone, 'bot', `[order_started | ${product.name} × ${quantity}]`, 'order_start');
+      return;
+    }
 
     // 1. قالب واتساب — نحلة تقرر أي قالب ترسل
     const templateMatch = botReply.match(/\[TEMPLATE:([^\]]+)\]/);
