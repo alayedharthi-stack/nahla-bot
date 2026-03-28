@@ -826,19 +826,26 @@ async function downloadWhatsAppMedia(mediaId) {
 // رفع ملف الصوت إلى Supabase Storage
 async function uploadAudioToStorage(buffer, mimeType, phone) {
   try {
+    const hasServiceKey = !!CONFIG.supabaseServiceKey;
+    console.log(`🎙️ Upload attempt | serviceKey:${hasServiceKey} | mime:${mimeType} | size:${buffer.length}`);
     const ext = mimeType.includes('ogg') ? 'ogg'
       : mimeType.includes('mp4') ? 'mp4'
       : mimeType.includes('mpeg') ? 'mp3'
       : 'ogg';
     const fileName = `${phone}_${Date.now()}.${ext}`;
-    const { error } = await supabaseStorage.storage
+    const { data: uploadData, error } = await supabaseStorage.storage
       .from('voice-messages')
       .upload(fileName, buffer, { contentType: mimeType, upsert: false });
-    if (error) { console.error('❌ Storage upload error:', error.message); return null; }
+    if (error) {
+      console.error('❌ Storage upload error:', JSON.stringify(error));
+      return null;
+    }
+    console.log('✅ Storage upload success:', uploadData?.path);
     const { data } = supabaseStorage.storage.from('voice-messages').getPublicUrl(fileName);
+    console.log('🔗 Public URL:', data?.publicUrl);
     return data?.publicUrl || null;
   } catch (err) {
-    console.error('❌ uploadAudioToStorage:', err.message);
+    console.error('❌ uploadAudioToStorage exception:', err.message);
     return null;
   }
 }
